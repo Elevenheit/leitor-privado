@@ -19,6 +19,7 @@ export default function SeriesPage({ params }: { params: Promise<{ id: string }>
 function SeriesDetail({ user, id }: { user: User; id: string }) {
   const [series, setSeries] = useState<Series | null>(null);
   const [volumes, setVolumes] = useState<Volume[]>([]);
+  const [allVolumes, setAllVolumes] = useState<Volume[]>([]);
   const [books, setBooks] = useState<Book[]>([]);
   const [progress, setProgress] = useState<Record<string, ReadingProgress>>({});
   const [loading, setLoading] = useState(true);
@@ -35,17 +36,18 @@ function SeriesDetail({ user, id }: { user: User; id: string }) {
 
   const load = useCallback(async () => {
     const api = supabase();
-    const [s, v, b, p, allSeries] = await Promise.all([
+    const [s, v, b, p, allSeries, userVolumes] = await Promise.all([
       api.from("series").select("*").eq("id", id).eq("owner_id", user.id).maybeSingle(),
       api.from("volumes").select("*").eq("series_id", id).eq("owner_id", user.id).order("sort_order").order("volume_number"),
       api.from("books").select("*").eq("series_id", id).eq("owner_id", user.id).order("sort_order").order("chapter_number"),
       api.from("reading_progress").select("*").eq("owner_id", user.id),
       api.from("series").select("*").eq("owner_id", user.id).order("title"),
+      api.from("volumes").select("*").eq("owner_id", user.id).order("sort_order").order("volume_number"),
     ]);
-    const failure = s.error || v.error || b.error || p.error || allSeries.error;
+    const failure = s.error || v.error || b.error || p.error || allSeries.error || userVolumes.error;
     if (failure) setError(failure.message);
     else {
-      const current = s.data as Series | null; setSeries(current); setVolumes((v.data || []) as Volume[]); setBooks((b.data || []) as Book[]); setSeriesOptions((allSeries.data || []) as Series[]); setProgress(Object.fromEntries(((p.data || []) as ReadingProgress[]).map(item => [item.book_id, item])));
+      const current = s.data as Series | null; setSeries(current); setVolumes((v.data || []) as Volume[]); setAllVolumes((userVolumes.data || []) as Volume[]); setBooks((b.data || []) as Book[]); setSeriesOptions((allSeries.data || []) as Series[]); setProgress(Object.fromEntries(((p.data || []) as ReadingProgress[]).map(item => [item.book_id, item])));
       if (current?.cover_path) { const { data } = await supabase().storage.from("covers").createSignedUrl(current.cover_path, 3600); setCoverUrl(data?.signedUrl || ""); }
     }
     setLoading(false);
@@ -77,22 +79,30 @@ function SeriesDetail({ user, id }: { user: User; id: string }) {
   }
   async function saveChapter() {
     if (!editing || !chapterName.trim()) return;
+    const selectedVolume = chapterVolume ? allVolumes.find(volume => volume.id === chapterVolume) : null;
+    if (chapterVolume && (!selectedVolume || selectedVolume.series_id !== chapterSeries)) {
+      setError("O volume selecionado não pertence à obra escolhida.");
+      return;
+    }
     const number = chapterNumber.trim() ? Number(chapterNumber) : null;
     const { error: updateError } = await supabase().from("books").update({ title: chapterName.trim(), chapter_title: chapterName.trim(), chapter_number: number, sort_order: number ? Math.round(number * 1000) : editing.sort_order, series_id: chapterSeries || null, volume_id: chapterVolume || null }).eq("id", editing.id).eq("owner_id", user.id);
     if (updateError) setError(updateError.message); else setEditing(null);
     await load();
   }
-  const selectedVolumes = volumes.filter(volume => volume.series_id === chapterSeries);
+  const selectedVolumes = allVolumes.filter(volume => volume.series_id === chapterSeries);
   const wholeChapters = books.filter(book => !book.volume_id);
   const lastRead = [...books].filter(book => progress[book.id]).sort((a, b) => (progress[b.id]?.updated_at || "").localeCompare(progress[a.id]?.updated_at || ""))[0];
   const chapterBooks = books.filter(book => book.content_type !== "volume");
   const chapterCount = chapterBooks.length;
+  const overallProgress = chapterCount
+    ? Math.min(100, Math.max(0, Math.round(chapterBooks.filter(book => progress[book.id]).length / chapterCount * 100)))
+    : 0;
 
   if (loading) return <><Nav back/><main className="reader-status">Carregando obra…</main></>;
   if (!series) return <><Nav back/><main className="reader-status"><h1>Obra não encontrada</h1><p>{error || "A obra não existe ou você não tem acesso."}</p><Link className="primary-button" href="/">Voltar</Link></main></>;
   return <><Nav back/><main className="series-page">
     <Link className="back-link" href="/"><ArrowLeft size={16}/> Biblioteca</Link>
-    <section className="series-hero"><div className="series-hero-cover" style={coverUrl ? { backgroundImage: `linear-gradient(0deg,#171518e8,transparent 75%),url("${coverUrl}")`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}><span>✦</span><strong>{series.title}</strong><small>NUK · PRIVATE LIBRARY</small></div><div className="series-hero-copy"><span className="eyebrow">Obra · Biblioteca privada</span><h1>{series.title}</h1>{series.description && <p>{series.description}</p>}<div className="series-stats"><span><strong>{volumes.length}</strong> volumes</span><span><strong>{chapterCount}</strong> capítulos</span><span><strong>{chapterCount ? Math.round(books.reduce((n,b) => n + (progress[b.id] ? 1 : 0), 0) / chapterCount * 100) : 0}%</strong> concluído</span></div>{lastRead && <Link className="last-read" href={`/read/${lastRead.id}`}><BookOpen size={16}/> Última leitura: {lastRead.chapter_number ? `Capítulo ${lastRead.chapter_number}` : lastRead.chapter_title || lastRead.title} <ChevronRight size={15}/></Link>}</div></section>
+    <section className="series-hero"><div className="series-hero-cover" style={coverUrl ? { backgroundImage: `linear-gradient(0deg,#171518e8,transparent 75%),url("${coverUrl}")`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}><span>✦</span><strong>{series.title}</strong><small>NUK · PRIVATE LIBRARY</small></div><div className="series-hero-copy"><span className="eyebrow">Obra · Biblioteca privada</span><h1>{series.title}</h1>{series.description && <p>{series.description}</p>}<div className="series-stats"><span><strong>{volumes.length}</strong> volumes</span><span><strong>{chapterCount}</strong> capítulos</span><span><strong>{overallProgress}%</strong> concluído</span></div>{lastRead && <Link className="last-read" href={`/read/${lastRead.id}`}><BookOpen size={16}/> Última leitura: {lastRead.chapter_number ? `Capítulo ${lastRead.chapter_number}` : lastRead.chapter_title || lastRead.title} <ChevronRight size={15}/></Link>}</div></section>
     {error && <div className="error dashboard-error">{error}<button onClick={() => setError("")}>×</button></div>}
     <section className="volumes-section"><div className="section-head"><div><span className="eyebrow">Organize sua leitura</span><h2>Volumes <span className="count">{volumes.length}</span></h2></div></div>
       <form className="new-volume-form" onSubmit={e => { e.preventDefault(); void createVolume(); }}><label>Número<input type="number" min="0" step="any" placeholder="16" value={volumeNumber} onChange={e => setVolumeNumber(e.target.value)}/></label><label>Título opcional<input placeholder="Subtítulo do volume" value={volumeTitle} onChange={e => setVolumeTitle(e.target.value)}/></label><button className="secondary-button" type="submit"><Plus size={16}/> Criar volume</button></form>
