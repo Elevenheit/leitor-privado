@@ -7,7 +7,7 @@ returns boolean
 language sql
 stable
 as $$
-  select (select auth.uid()) = '00000000-0000-0000-0000-000000000000'::uuid;
+  select (select auth.uid()) = '0b42c97b-0c71-48d8-9410-3d0b78fc5bb2'::uuid;
 $$;
 
 revoke all on function public.is_private_owner() from public;
