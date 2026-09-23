@@ -1,0 +1,116 @@
+"use client";
+
+import Link from "next/link";
+import { useCallback, useEffect, useState } from "react";
+import { ArrowLeft, BookOpen, Check, ChevronRight, Pencil, Plus, Trash2 } from "lucide-react";
+import type { User } from "@supabase/supabase-js";
+import { AuthGate } from "@/components/auth-gate";
+import { Nav } from "@/components/nav";
+import { supabase } from "@/lib/supabase";
+import type { Book, ReadingProgress, Series, Volume } from "@/lib/types";
+
+export default function SeriesPage({ params }: { params: Promise<{ id: string }> }) {
+  const [id, setId] = useState("");
+  useEffect(() => { void params.then(({ id: value }) => setId(value)); }, [params]);
+  if (!id) return <main className="reader-status">Abrindo obra…</main>;
+  return <AuthGate>{user => <SeriesDetail user={user} id={id}/>}</AuthGate>;
+}
+
+function SeriesDetail({ user, id }: { user: User; id: string }) {
+  const [series, setSeries] = useState<Series | null>(null);
+  const [volumes, setVolumes] = useState<Volume[]>([]);
+  const [books, setBooks] = useState<Book[]>([]);
+  const [progress, setProgress] = useState<Record<string, ReadingProgress>>({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [volumeTitle, setVolumeTitle] = useState("");
+  const [volumeNumber, setVolumeNumber] = useState("");
+  const [editing, setEditing] = useState<Book | null>(null);
+  const [chapterName, setChapterName] = useState("");
+  const [chapterNumber, setChapterNumber] = useState("");
+  const [chapterSeries, setChapterSeries] = useState(id);
+  const [chapterVolume, setChapterVolume] = useState("");
+  const [seriesOptions, setSeriesOptions] = useState<Series[]>([]);
+  const [coverUrl, setCoverUrl] = useState("");
+
+  const load = useCallback(async () => {
+    const api = supabase();
+    const [s, v, b, p, allSeries] = await Promise.all([
+      api.from("series").select("*").eq("id", id).eq("owner_id", user.id).maybeSingle(),
+      api.from("volumes").select("*").eq("series_id", id).eq("owner_id", user.id).order("sort_order").order("volume_number"),
+      api.from("books").select("*").eq("series_id", id).eq("owner_id", user.id).order("sort_order").order("chapter_number"),
+      api.from("reading_progress").select("*").eq("owner_id", user.id),
+      api.from("series").select("*").eq("owner_id", user.id).order("title"),
+    ]);
+    const failure = s.error || v.error || b.error || p.error || allSeries.error;
+    if (failure) setError(failure.message);
+    else {
+      const current = s.data as Series | null; setSeries(current); setVolumes((v.data || []) as Volume[]); setBooks((b.data || []) as Book[]); setSeriesOptions((allSeries.data || []) as Series[]); setProgress(Object.fromEntries(((p.data || []) as ReadingProgress[]).map(item => [item.book_id, item])));
+      if (current?.cover_path) { const { data } = await supabase().storage.from("covers").createSignedUrl(current.cover_path, 3600); setCoverUrl(data?.signedUrl || ""); }
+    }
+    setLoading(false);
+  }, [id, user.id]);
+  // Fetch the selected private work.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { void load(); }, [load]);
+
+  async function createVolume() {
+    if (!volumeNumber && !volumeTitle.trim()) return;
+    const number = volumeNumber ? Number(volumeNumber) : null;
+    const { error: saveError } = await supabase().from("volumes").insert({ owner_id: user.id, series_id: id, volume_number: number, title: volumeTitle.trim() || null, sort_order: number ? Math.round(number * 1000) : volumes.length * 1000 });
+    if (saveError) setError(saveError.message); else { setVolumeNumber(""); setVolumeTitle(""); await load(); }
+  }
+  async function editVolume(volume: Volume) {
+    const num = window.prompt("Número/ordem do volume", volume.volume_number?.toString() || ""); if (num === null) return;
+    const title = window.prompt("Título opcional", volume.title || ""); if (title === null) return;
+    const number = num.trim() ? Number(num) : null;
+    const { error: updateError } = await supabase().from("volumes").update({ volume_number: number, title: title.trim() || null, sort_order: number ? Math.round(number * 1000) : volume.sort_order, updated_at: new Date().toISOString() }).eq("id", volume.id).eq("owner_id", user.id);
+    if (updateError) setError(updateError.message); await load();
+  }
+  async function deleteVolume(volume: Volume) {
+    if (!window.confirm(`Excluir a organização “${volume.title || `Volume ${volume.volume_number || ""}`}”? Os PDFs e o progresso serão preservados em “Sem volume”.`)) return;
+    const { error: deleteError } = await supabase().from("volumes").delete().eq("id", volume.id).eq("owner_id", user.id);
+    if (deleteError) setError(deleteError.message); await load();
+  }
+  function openEdit(book: Book) {
+    setEditing(book); setChapterName(book.chapter_title || book.title); setChapterNumber(book.chapter_number?.toString() || ""); setChapterSeries(book.series_id || id); setChapterVolume(book.volume_id || "");
+  }
+  async function saveChapter() {
+    if (!editing || !chapterName.trim()) return;
+    const number = chapterNumber.trim() ? Number(chapterNumber) : null;
+    const { error: updateError } = await supabase().from("books").update({ title: chapterName.trim(), chapter_title: chapterName.trim(), chapter_number: number, sort_order: number ? Math.round(number * 1000) : editing.sort_order, series_id: chapterSeries || null, volume_id: chapterVolume || null }).eq("id", editing.id).eq("owner_id", user.id);
+    if (updateError) setError(updateError.message); else setEditing(null);
+    await load();
+  }
+  const selectedVolumes = volumes.filter(volume => volume.series_id === chapterSeries);
+  const wholeChapters = books.filter(book => !book.volume_id);
+  const lastRead = [...books].filter(book => progress[book.id]).sort((a, b) => (progress[b.id]?.updated_at || "").localeCompare(progress[a.id]?.updated_at || ""))[0];
+  const chapterBooks = books.filter(book => book.content_type !== "volume");
+  const chapterCount = chapterBooks.length;
+
+  if (loading) return <><Nav back/><main className="reader-status">Carregando obra…</main></>;
+  if (!series) return <><Nav back/><main className="reader-status"><h1>Obra não encontrada</h1><p>{error || "A obra não existe ou você não tem acesso."}</p><Link className="primary-button" href="/">Voltar</Link></main></>;
+  return <><Nav back/><main className="series-page">
+    <Link className="back-link" href="/"><ArrowLeft size={16}/> Biblioteca</Link>
+    <section className="series-hero"><div className="series-hero-cover" style={coverUrl ? { backgroundImage: `linear-gradient(0deg,#171518e8,transparent 75%),url("${coverUrl}")`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}><span>✦</span><strong>{series.title}</strong><small>NUK · PRIVATE LIBRARY</small></div><div className="series-hero-copy"><span className="eyebrow">Obra · Biblioteca privada</span><h1>{series.title}</h1>{series.description && <p>{series.description}</p>}<div className="series-stats"><span><strong>{volumes.length}</strong> volumes</span><span><strong>{chapterCount}</strong> capítulos</span><span><strong>{chapterCount ? Math.round(books.reduce((n,b) => n + (progress[b.id] ? 1 : 0), 0) / chapterCount * 100) : 0}%</strong> concluído</span></div>{lastRead && <Link className="last-read" href={`/read/${lastRead.id}`}><BookOpen size={16}/> Última leitura: {lastRead.chapter_number ? `Capítulo ${lastRead.chapter_number}` : lastRead.chapter_title || lastRead.title} <ChevronRight size={15}/></Link>}</div></section>
+    {error && <div className="error dashboard-error">{error}<button onClick={() => setError("")}>×</button></div>}
+    <section className="volumes-section"><div className="section-head"><div><span className="eyebrow">Organize sua leitura</span><h2>Volumes <span className="count">{volumes.length}</span></h2></div></div>
+      <form className="new-volume-form" onSubmit={e => { e.preventDefault(); void createVolume(); }}><label>Número<input type="number" min="0" step="any" placeholder="16" value={volumeNumber} onChange={e => setVolumeNumber(e.target.value)}/></label><label>Título opcional<input placeholder="Subtítulo do volume" value={volumeTitle} onChange={e => setVolumeTitle(e.target.value)}/></label><button className="secondary-button" type="submit"><Plus size={16}/> Criar volume</button></form>
+      {volumes.map(volume => {
+        const chapters = books.filter(book => book.volume_id === volume.id);
+        return <section className="volume-section" key={volume.id}><header className="volume-heading"><div><span className="eyebrow">{volume.volume_number ? `Volume ${volume.volume_number}` : "Volume"}</span><h3>{volume.title || `Volume ${volume.volume_number || "sem número"}`}</h3><small>{chapters.length} {chapters.length === 1 ? "capítulo" : "capítulos"}</small></div><div className="volume-actions"><button aria-label="Editar e reorganizar volume" onClick={() => void editVolume(volume)}><Pencil size={16}/></button><button aria-label="Excluir volume" onClick={() => void deleteVolume(volume)}><Trash2 size={16}/></button></div></header><ChapterList chapters={chapters} progress={progress} onEdit={openEdit}/></section>;
+      })}
+      {wholeChapters.length > 0 && <section className="volume-section"><header className="volume-heading"><div><span className="eyebrow">Capítulos</span><h3>Sem volume</h3></div></header><ChapterList chapters={wholeChapters} progress={progress} onEdit={openEdit}/></section>}
+      {!volumes.length && !wholeChapters.length && <div className="empty-state"><BookOpen size={30}/><h3>Nenhum capítulo cadastrado</h3><p>Adicione um PDF pela biblioteca para associá-lo a esta obra.</p><Link href="/" className="primary-button">Voltar à biblioteca</Link></div>}
+    </section>
+    {editing && <div className="modal-backdrop" role="presentation" onMouseDown={e => { if (e.target === e.currentTarget) setEditing(null); }}><section className="form-modal" role="dialog" aria-modal="true"><button className="modal-close" onClick={() => setEditing(null)}>×</button><span className="eyebrow">Metadados do PDF</span><h2>Editar capítulo</h2><label>Título<input value={chapterName} onChange={e => setChapterName(e.target.value)}/></label><label>Número<input type="number" min="0" step="any" value={chapterNumber} onChange={e => setChapterNumber(e.target.value)}/></label><label>Obra<select value={chapterSeries} onChange={e => { setChapterSeries(e.target.value); setChapterVolume(""); }}><option value="">Sem coleção</option>{seriesOptions.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}</select></label><label>Volume<select value={chapterVolume} onChange={e => setChapterVolume(e.target.value)}><option value="">Sem volume</option>{selectedVolumes.map(v => <option key={v.id} value={v.id}>{v.volume_number ? `Volume ${v.volume_number}` : v.title || "Volume"}</option>)}</select></label><button className="primary-button" onClick={() => void saveChapter()}><Check size={17}/> Salvar capítulo</button></section></div>}
+    <footer className="site-footer">nook. <span>Um capítulo de cada vez.</span></footer>
+  </main></>;
+}
+
+function ChapterList({ chapters, progress, onEdit }: { chapters: Book[]; progress: Record<string, ReadingProgress>; onEdit: (book: Book) => void }) {
+  return <ol className="chapter-list">{chapters.map((book, index) => {
+    const saved = progress[book.id]; const done = Boolean(book.total_pages && saved && saved.page_number >= book.total_pages); const percent = done ? 100 : saved && book.total_pages ? Math.min(99, Math.round(saved.page_number / book.total_pages * 100)) : 0;
+    return <li className="chapter-row" key={book.id}><span className="chapter-number">{book.content_type === "volume" ? `V${book.chapter_number ?? ""}` : book.chapter_number ?? index + 1}</span><div className="chapter-info"><Link href={`/read/${book.id}`}>{book.content_type === "volume" ? `Volume completo · ${book.chapter_title || book.title}` : book.chapter_title || book.title}</Link><small>{done ? "Concluído" : saved ? "Lendo" : "Não iniciado"}{saved && book.total_pages ? ` · ${percent}%` : ""}</small><div className="book-progress"><div style={{ width: `${percent}%` }}/></div></div><Link className="chapter-continue" href={`/read/${book.id}`}>{saved ? "Continuar" : "Ler"}<ChevronRight size={16}/></Link><button className="chapter-edit" onClick={() => onEdit(book)} aria-label="Editar capítulo ou mover"><Pencil size={15}/></button></li>;
+  })}{!chapters.length && <li className="chapter-empty">Ainda não há capítulos neste volume.</li>}</ol>;
+}

@@ -2,209 +2,216 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight, Columns2, Maximize2, Minus, Plus, Type } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight, Minus, Plus, Type } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 import type { User } from "@supabase/supabase-js";
 import { AuthGate } from "@/components/auth-gate";
 import { Nav } from "@/components/nav";
 import { BUCKET, supabase } from "@/lib/supabase";
-import type { Book, ReadingProgress } from "@/lib/types";
+import type { Book, ReadingProgress, Series, Volume } from "@/lib/types";
 
 type Mode = "text" | "page";
+type Theme = "dark" | "sepia" | "light";
+type Position = { page: number; line: number; ratio: number };
 
 export default function ReadPage() {
   const params = useParams<{ id: string }>();
-  return <AuthGate>{user => <Reader key={params.id} user={user} id={params.id} />}</AuthGate>;
+  return <AuthGate>{user => <Reader key={params.id} user={user} id={params.id}/>}</AuthGate>;
 }
 
 function Reader({ user, id }: { user: User; id: string }) {
   const router = useRouter();
   const [book, setBook] = useState<Book | null>(null);
+  const [series, setSeries] = useState<Series | null>(null);
+  const [volume, setVolume] = useState<Volume | null>(null);
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
-  const [page, setPage] = useState(1);
   const [pages, setPages] = useState(0);
   const [mode, setMode] = useState<Mode>("text");
-  const [fontSize, setFontSize] = useState(19);
-  const [lines, setLines] = useState<string[]>([]);
-  const [isScanned, setIsScanned] = useState(false);
+  const [theme, setTheme] = useState<Theme>("dark");
+  const [fontSize, setFontSize] = useState(20);
+  const [lineHeight, setLineHeight] = useState(1.85);
+  const [textWidth, setTextWidth] = useState(720);
+  const [textByPage, setTextByPage] = useState<Record<number, string[]>>({});
+  const [activePages, setActivePages] = useState<Set<number>>(new Set([1, 2, 3]));
+  const [loadingPages, setLoadingPages] = useState<Set<number>>(new Set());
+  const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(true);
-  const [pageLoading, setPageLoading] = useState(false);
   const [error, setError] = useState("");
-  const [saveState, setSaveState] = useState("Salvo na nuvem");
+  const [saveState, setSaveState] = useState("Salvo");
+  const [previousId, setPreviousId] = useState<string | null>(null);
+  const [nextId, setNextId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const pageCanvasRef = useRef<HTMLDivElement>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pageRef = useRef(1);
   const modeRef = useRef<Mode>("text");
-  const progressReady = useRef(false);
-  const initialPosition = useRef<{ page: number; line: number; ratio: number } | null>(null);
+  const readyRef = useRef(false);
+  const restoringRef = useRef<Position | null>(null);
+  const loadingRef = useRef(new Set<number>());
+
+  const orderedPages = useMemo(() => Array.from({ length: pages }, (_, i) => i + 1), [pages]);
 
   const save = useCallback(async () => {
-    if (!progressReady.current || initialPosition.current) return;
+    if (!readyRef.current || restoringRef.current) return;
     const container = scrollRef.current;
-    const ratio = container ? Math.min(1, Math.max(0, container.scrollTop / Math.max(1, container.scrollHeight - container.clientHeight))) : 0;
+    if (!container) return;
+    const ratio = Math.min(1, Math.max(0, container.scrollTop / Math.max(1, container.scrollHeight - container.clientHeight)));
+    const segment = container.querySelector<HTMLElement>(`[data-page-segment="${pageRef.current}"]`);
+    const visibleTop = container.getBoundingClientRect().top + 28;
+    const lines = segment?.querySelectorAll<HTMLElement>("[data-line]");
     let lineIndex = 0;
-    if (modeRef.current === "text" && container) {
-      const lineEls = container.querySelectorAll<HTMLElement>("[data-line]");
-      const top = container.getBoundingClientRect().top + 24;
-      for (const el of lineEls) {
-        if (el.getBoundingClientRect().bottom >= top) { lineIndex = Number(el.dataset.line); break; }
-      }
-    }
+    if (lines) for (const line of lines) { if (line.getBoundingClientRect().bottom >= visibleTop) { lineIndex = Number(line.dataset.line); break; } }
     setSaveState("Salvando…");
-    const { error } = await supabase().from("reading_progress").upsert({
-      book_id: id, owner_id: user.id, page_number: pageRef.current,
-      line_index: lineIndex, scroll_ratio: ratio, reading_mode: modeRef.current,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: "book_id" });
-    setSaveState(error ? "Falha ao salvar" : "Salvo na nuvem");
+    const { error: saveError } = await supabase().from("reading_progress").upsert({ book_id: id, owner_id: user.id, page_number: pageRef.current, line_index: lineIndex, scroll_ratio: ratio, reading_mode: modeRef.current, updated_at: new Date().toISOString() }, { onConflict: "book_id" });
+    setSaveState(saveError ? "Falha ao salvar" : "Salvo");
   }, [id, user.id]);
 
   useEffect(() => {
-    let cancelled = false;
-    let loadingTask: PDFDocumentLoadingTask | null = null;
+    let cancelled = false; let task: PDFDocumentLoadingTask | null = null;
     async function init() {
       try {
         const api = supabase();
-        const { data: bookData, error: bookError } = await api.from("books").select("*").eq("id", id).eq("owner_id", user.id).single();
-        if (bookError || !bookData) throw new Error("Livro não encontrado ou sem acesso.");
-        const { data: progressData } = await api.from("reading_progress").select("*").eq("book_id", id).maybeSingle();
-        const saved = progressData as ReadingProgress | null;
-        const { data: blob, error: downloadError } = await api.storage.from(BUCKET).download(bookData.file_path);
-        if (downloadError || !blob) throw new Error(downloadError?.message || "Não foi possível baixar o PDF.");
+        const [bookResult, progressResult] = await Promise.all([
+          api.from("books").select("*").eq("id", id).eq("owner_id", user.id).single(),
+          api.from("reading_progress").select("*").eq("book_id", id).maybeSingle(),
+        ]);
+        if (bookResult.error || !bookResult.data) throw new Error("Capítulo não encontrado ou sem acesso.");
+        const current = bookResult.data as Book;
+        const [workResult, volumeResult, blobResult] = await Promise.all([
+          current.series_id ? api.from("series").select("*").eq("id", current.series_id).maybeSingle() : Promise.resolve({ data: null, error: null }),
+          current.volume_id ? api.from("volumes").select("*").eq("id", current.volume_id).maybeSingle() : Promise.resolve({ data: null, error: null }),
+          api.storage.from(BUCKET).download(current.file_path),
+        ]);
+        if (blobResult.error || !blobResult.data) throw new Error(blobResult.error?.message || "Não foi possível baixar o PDF.");
         const pdfjs = await import("pdfjs-dist");
         pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
-        loadingTask = pdfjs.getDocument({ data: new Uint8Array(await blob.arrayBuffer()) });
-        const loadedPdf = await loadingTask.promise;
+        task = pdfjs.getDocument({ data: new Uint8Array(await blobResult.data.arrayBuffer()) });
+        const loaded = await task.promise;
         if (cancelled) return;
-        setBook(bookData as Book);
-        setPdf(loadedPdf);
-        setPages(loadedPdf.numPages);
-        const startPage = Math.min(loadedPdf.numPages, Math.max(1, saved?.page_number || 1));
-        initialPosition.current = saved ? { page: startPage, line: saved.line_index || 0, ratio: saved.scroll_ratio || 0 } : null;
-        pageRef.current = startPage;
-        modeRef.current = saved?.reading_mode || "text";
-        setPage(startPage);
-        setMode(modeRef.current);
-        progressReady.current = true;
-        setLoading(false);
-        if (bookData.total_pages !== loadedPdf.numPages) void api.from("books").update({ total_pages: loadedPdf.numPages }).eq("id", id);
-      } catch (cause) {
-        if (!cancelled) { setError(cause instanceof Error ? cause.message : "Falha ao abrir PDF."); setLoading(false); }
-      }
+        const saved = progressResult.data as ReadingProgress | null;
+        const start = Math.min(loaded.numPages, Math.max(1, saved?.page_number || 1));
+        setBook(current); setSeries(workResult.data as Series | null); setVolume(volumeResult.data as Volume | null); setPdf(loaded); setPages(loaded.numPages); setCurrentPage(start); pageRef.current = start;
+        restoringRef.current = saved ? { page: start, line: saved.line_index || 0, ratio: saved.scroll_ratio || 0 } : null;
+        setMode(saved?.reading_mode || "text"); modeRef.current = saved?.reading_mode || "text";
+        setActivePages(new Set([Math.max(1, start - 1), start, Math.min(loaded.numPages, start + 1)]));
+        const [allBooks, allVolumes] = await Promise.all([
+          current.series_id ? api.from("books").select("id, series_id, volume_id, chapter_number, sort_order, created_at").eq("owner_id", user.id).eq("series_id", current.series_id) : api.from("books").select("id, series_id, volume_id, chapter_number, sort_order, created_at").eq("owner_id", user.id),
+          current.series_id ? api.from("volumes").select("id, series_id, volume_number, sort_order").eq("owner_id", user.id).eq("series_id", current.series_id) : Promise.resolve({ data: [] as Pick<Volume, "id" | "series_id" | "volume_number" | "sort_order">[], error: null }),
+        ]);
+        if (!cancelled && allBooks.data) {
+          const volumeList = (allVolumes.data || []) as Pick<Volume, "id" | "series_id" | "volume_number" | "sort_order">[];
+          const bookList = [...allBooks.data] as Pick<Book, "id" | "series_id" | "volume_id" | "chapter_number" | "sort_order" | "created_at">[];
+          const volOrder = (value: string | null) => volumeList.find(v => v.id === value)?.sort_order ?? volumeList.find(v => v.id === value)?.volume_number ?? -1;
+          bookList.sort((a, b) => Number(volOrder(a.volume_id)) - Number(volOrder(b.volume_id)) || Number(a.chapter_number ?? a.sort_order) - Number(b.chapter_number ?? b.sort_order) || a.created_at.localeCompare(b.created_at));
+          const index = bookList.findIndex(item => item.id === id);
+          setPreviousId(index > 0 ? bookList[index - 1].id : null); setNextId(index >= 0 && index < bookList.length - 1 ? bookList[index + 1].id : null);
+        }
+        if (current.total_pages !== loaded.numPages) void api.from("books").update({ total_pages: loaded.numPages }).eq("id", id);
+        try { const prefs = localStorage.getItem("nook-reader-prefs"); if (prefs) { const value = JSON.parse(prefs) as { fontSize?: number; lineHeight?: number; textWidth?: number; theme?: Theme }; if (value.fontSize) setFontSize(value.fontSize); if (value.lineHeight) setLineHeight(value.lineHeight); if (value.textWidth) setTextWidth(value.textWidth); if (value.theme) setTheme(value.theme); } } catch { /* Preferences are optional. */ }
+        readyRef.current = true; setLoading(false);
+      } catch (cause) { if (!cancelled) { setError(cause instanceof Error ? cause.message : "Falha ao abrir PDF."); setLoading(false); } }
     }
     void init();
-    return () => { cancelled = true; progressReady.current = false; if (loadingTask) void loadingTask.destroy(); };
+    return () => { cancelled = true; readyRef.current = false; if (task) void task.destroy(); };
   }, [id, user.id]);
 
   useEffect(() => {
-    if (!pdf) return;
-    let cancelled = false;
-    // Loading state must follow the current PDF page.
+    const root = scrollRef.current; if (!root || !pages) return;
+    const observer = new IntersectionObserver(entries => {
+      const visible = entries.filter(entry => entry.isIntersecting).map(entry => Number((entry.target as HTMLElement).dataset.pageSegment));
+      if (!visible.length) return;
+      const selected = visible.reduce((best, value) => {
+        const bestEl = root.querySelector<HTMLElement>(`[data-page-segment="${best}"]`); const el = root.querySelector<HTMLElement>(`[data-page-segment="${value}"]`);
+        return Math.abs((el?.getBoundingClientRect().top || 0) - root.getBoundingClientRect().top) < Math.abs((bestEl?.getBoundingClientRect().top || 0) - root.getBoundingClientRect().top) ? value : best;
+      }, visible[0]);
+      pageRef.current = selected; setCurrentPage(selected);
+      const near = new Set<number>(); for (const n of visible) for (let offset = -2; offset <= 2; offset++) if (n + offset >= 1 && n + offset <= pages) near.add(n + offset);
+      setActivePages(near);
+    }, { root, rootMargin: "900px 0px", threshold: 0.02 });
+    root.querySelectorAll("[data-page-segment]").forEach(element => observer.observe(element));
+    return () => observer.disconnect();
+  }, [pages, loading]);
+
+  const loadPageText = useCallback(async (pageNo: number) => {
+    if (!pdf || loadingRef.current.has(pageNo) || textByPage[pageNo]) return;
+    loadingRef.current.add(pageNo); setLoadingPages(previous => new Set(previous).add(pageNo));
+    try {
+      const pdfPage = await pdf.getPage(pageNo); const content = await pdfPage.getTextContent(); const lines: string[] = []; let line = "";
+      for (const item of content.items) { if (!("str" in item)) continue; const fragment = item.str.trim(); if (fragment) line += (line && !/\s$/.test(line) ? " " : "") + fragment; if (item.hasEOL) { if (line.trim()) lines.push(line.trim()); line = ""; } }
+      if (line.trim()) lines.push(line.trim()); setTextByPage(previous => ({ ...previous, [pageNo]: lines }));
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Falha ao extrair texto."); }
+    finally { loadingRef.current.delete(pageNo); setLoadingPages(previous => { const next = new Set(previous); next.delete(pageNo); return next; }); }
+  }, [pdf, textByPage]);
+
+  useEffect(() => {
+    if (!pdf || mode !== "text") return;
+    // Extract only pages inside the lazy loading window as they enter it.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setPageLoading(true);
-    setLines([]);
-    async function loadPage() {
-      try {
-        const pdfPage = await pdf!.getPage(page);
-        const content = await pdfPage.getTextContent();
-        const extracted: string[] = [];
-        let current = "";
-        for (const item of content.items) {
-          if (!("str" in item)) continue;
-          const fragment = item.str.trim();
-          if (fragment) current += (current && !/\s$/.test(current) ? " " : "") + fragment;
-          if (item.hasEOL) { if (current.trim()) extracted.push(current.trim()); current = ""; }
-        }
-        if (current.trim()) extracted.push(current.trim());
-        if (!cancelled) { setLines(extracted); setIsScanned(extracted.length === 0); setPageLoading(false); }
-      } catch (cause) {
-        if (!cancelled) { setError(cause instanceof Error ? cause.message : "Falha ao carregar página."); setPageLoading(false); }
-      }
-    }
-    void loadPage();
-    return () => { cancelled = true; };
-  }, [pdf, page]);
+    for (const pageNo of activePages) void loadPageText(pageNo);
+  }, [pdf, mode, activePages, loadPageText]);
 
   useEffect(() => {
-    if (!pdf || (mode !== "page" && !isScanned) || pageLoading || !canvasRef.current || !pageCanvasRef.current) return;
-    let cancelled = false;
-    let renderTask: { cancel: () => void; promise: Promise<unknown> } | null = null;
-    async function render() {
-      const pdfPage = await pdf!.getPage(page);
-      if (cancelled || !canvasRef.current || !pageCanvasRef.current) return;
-      const base = pdfPage.getViewport({ scale: 1 });
-      const width = Math.min(pageCanvasRef.current.clientWidth, 940);
-      const scale = width / base.width;
-      const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
-      const viewport = pdfPage.getViewport({ scale: scale * pixelRatio });
-      const canvas = canvasRef.current;
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      canvas.style.width = `${viewport.width / pixelRatio}px`;
-      canvas.style.height = `${viewport.height / pixelRatio}px`;
-      renderTask = pdfPage.render({ canvas, canvasContext: canvas.getContext("2d")!, viewport });
-      try { await renderTask.promise; } catch { /* Cancelled during page change. */ }
-    }
-    void render();
-    return () => { cancelled = true; renderTask?.cancel(); };
-  }, [pdf, page, mode, isScanned, pageLoading]);
-
-  useEffect(() => {
-    if (pageLoading || !scrollRef.current) return;
-    const container = scrollRef.current;
-    const saved = initialPosition.current;
+    const root = scrollRef.current; const saved = restoringRef.current;
+    if (!root || !saved || !pages) return;
+    const segment = root.querySelector<HTMLElement>(`[data-page-segment="${saved.page}"]`);
+    if (!segment) return;
+    if (modeRef.current === "text" && textByPage[saved.page] === undefined) return;
     requestAnimationFrame(() => {
-      if (saved?.page === page) {
-        const target = mode === "text" ? container.querySelector<HTMLElement>(`[data-line="${saved.line}"]`) : null;
-        if (target) container.scrollTop += target.getBoundingClientRect().top - container.getBoundingClientRect().top - 24;
-        else container.scrollTop = saved.ratio * Math.max(0, container.scrollHeight - container.clientHeight);
-        initialPosition.current = null;
-      } else container.scrollTop = 0;
+      const target = segment.querySelector<HTMLElement>(`[data-line="${saved.line}"]`);
+      if (target) root.scrollTop += target.getBoundingClientRect().top - root.getBoundingClientRect().top - 32;
+      else if (saved.ratio) root.scrollTop = saved.ratio * Math.max(0, root.scrollHeight - root.clientHeight);
+      else root.scrollTop = segment.offsetTop;
+      restoringRef.current = null;
     });
-  }, [page, pageLoading, mode]);
+  }, [pages, textByPage, mode]);
 
   useEffect(() => {
     const onVisibility = () => { if (document.visibilityState === "hidden") void save(); };
     document.addEventListener("visibilitychange", onVisibility);
-    return () => { document.removeEventListener("visibilitychange", onVisibility); if (saveTimer.current) clearTimeout(saveTimer.current); };
+    return () => { document.removeEventListener("visibilitychange", onVisibility); if (saveTimer.current) clearTimeout(saveTimer.current); void save(); };
   }, [save]);
 
   function onScroll() {
-    if (pageLoading || initialPosition.current) return;
+    if (restoringRef.current) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => void save(), 650);
+    saveTimer.current = setTimeout(() => void save(), 900);
   }
-  function goToPage(next: number) {
-    if (next < 1 || next > pages || next === page) return;
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    pageRef.current = next;
-    setPage(next);
-    if (scrollRef.current) scrollRef.current.scrollTop = 0;
-    void save();
+  function updatePrefs(change: Partial<{ fontSize: number; lineHeight: number; textWidth: number; theme: Theme }>) {
+    const next = { fontSize, lineHeight, textWidth, theme, ...change };
+    if (change.fontSize) setFontSize(change.fontSize); if (change.lineHeight) setLineHeight(change.lineHeight); if (change.textWidth) setTextWidth(change.textWidth); if (change.theme) setTheme(change.theme);
+    localStorage.setItem("nook-reader-prefs", JSON.stringify(next));
   }
-  function changeMode(next: Mode) {
-    if (next === mode) return;
-    modeRef.current = next;
-    setMode(next);
-    if (scrollRef.current) scrollRef.current.scrollTop = 0;
-    void save();
-  }
+  function setView(next: Mode) { modeRef.current = next; setMode(next); void save(); }
 
-  if (loading) return <><Nav back /><main className="reader-status">Abrindo sua leitura…</main></>;
-  if (error && !book) return <><Nav back /><main className="reader-status"><BookOpen size={34}/><h1>Não foi possível abrir</h1><p>{error}</p><Link href="/" className="primary-button">Voltar à biblioteca</Link></main></>;
+  if (loading) return <><Nav back/><main className="reader-status">Abrindo sua leitura…</main></>;
+  if (error && !book) return <><Nav back/><main className="reader-status"><BookOpen size={34}/><h1>Não foi possível abrir</h1><p>{error}</p><Link href="/" className="primary-button">Voltar à biblioteca</Link></main></>;
 
-  return <div className="reader-app"><Nav back /><header className="reader-topbar"><button className="reader-back" onClick={() => router.push("/")}><ArrowLeft size={18}/><span>Biblioteca</span></button><div className="reader-heading"><strong>{book?.title}</strong><span>Página {page} de {pages}</span></div><span className="save-state">{saveState}</span></header>
-    <div className="reader-toolbar"><div className="mode-toggle"><button className={mode === "text" ? "selected" : ""} onClick={() => changeMode("text")}><Type size={16}/> Texto</button><button className={mode === "page" ? "selected" : ""} onClick={() => changeMode("page")}><Columns2 size={16}/> Página</button></div><div className="font-tools"><button aria-label="Diminuir fonte" onClick={() => setFontSize(Math.max(14, fontSize - 1))}><Minus size={16}/></button><span>Aa</span><button aria-label="Aumentar fonte" onClick={() => setFontSize(Math.min(30, fontSize + 1))}><Plus size={16}/></button></div></div>
-    <div className="reader-scroll" ref={scrollRef} onScroll={onScroll}>
-      <div className="reader-content"><div className="chapter-marker"><span>✦</span><small>PÁGINA {String(page).padStart(2, "0")}</small><span>✦</span></div>
-        {pageLoading ? <div className="reader-loading">Preparando página…</div> : mode === "text" && !isScanned ? <article className="reflow-text" style={{fontSize}}>{lines.map((line, index) => <p data-line={index} key={index}>{line}</p>)}</article> : <div className="pdf-page" ref={pageCanvasRef}><canvas ref={canvasRef} aria-label={`Página ${page} do PDF`} />{isScanned && mode === "text" && <div className="scan-note"><Maximize2 size={16}/> Esta página não contém texto selecionável. Exibindo a página original.</div>}</div>}
-        {error && <div className="error">{error}</div>}
-        <div className="page-end">✦</div>
-      </div>
-    </div>
-    <footer className="reader-footer"><button onClick={() => goToPage(page - 1)} disabled={page <= 1}><ChevronLeft size={19}/> <span>Anterior</span></button><div className="page-jump"><span>{page}</span><span className="muted">/ {pages}</span><input type="range" aria-label="Ir para página" min={1} max={Math.max(1, pages)} value={page} onChange={e => goToPage(Number(e.target.value))} /></div><button onClick={() => goToPage(page + 1)} disabled={page >= pages}><span>Próxima</span> <ChevronRight size={19}/></button></footer>
+  const pageCaption = book?.content_type === "volume" ? `Volume completo${book.chapter_number ? ` ${book.chapter_number}` : ""}${book.chapter_title ? ` · ${book.chapter_title}` : ""}` : book?.chapter_number ? `Capítulo ${book.chapter_number}${book.chapter_title ? ` · ${book.chapter_title}` : ""}` : book?.chapter_title || book?.title;
+  return <div className={`reader-app reader-theme-${theme}`}><Nav back/><header className="reader-topbar"><button className="reader-back" onClick={() => router.push(series ? `/series/${series.id}` : "/")}><ArrowLeft size={18}/><span>Biblioteca</span></button><div className="reader-heading"><strong>{series?.title || book?.title}</strong><span>{volume ? (volume.volume_number ? `Volume ${volume.volume_number}` : volume.title) : ""}{volume ? " · " : ""}{pageCaption}</span></div><span className="save-state">{saveState}</span></header>
+    <div className="reader-toolbar"><div className="mode-toggle"><button className={mode === "text" ? "selected" : ""} onClick={() => setView("text")}><Type size={16}/> Texto contínuo</button><button className={mode === "page" ? "selected" : ""} onClick={() => setView("page")}><BookOpen size={16}/> PDF contínuo</button></div><div className="reader-controls"><div className="font-tools"><button aria-label="Diminuir fonte" onClick={() => updatePrefs({ fontSize: Math.max(15, fontSize - 1) })}><Minus size={15}/></button><span>Aa</span><button aria-label="Aumentar fonte" onClick={() => updatePrefs({ fontSize: Math.min(30, fontSize + 1) })}><Plus size={15}/></button></div><label className="reader-select">Linha<select aria-label="Altura da linha" value={lineHeight} onChange={e => updatePrefs({ lineHeight: Number(e.target.value) })}><option value={1.65}>Compacta</option><option value={1.85}>Confortável</option><option value={2.05}>Ampla</option></select></label><label className="reader-select">Largura<select aria-label="Largura do texto" value={textWidth} onChange={e => updatePrefs({ textWidth: Number(e.target.value) })}><option value={620}>Estreita</option><option value={720}>Padrão</option><option value={780}>Ampla</option></select></label><label className="reader-select">Tema<select aria-label="Tema do leitor" value={theme} onChange={e => updatePrefs({ theme: e.target.value as Theme })}><option value="dark">Escuro</option><option value="sepia">Sépia</option><option value="light">Claro</option></select></label></div></div>
+    <div className="reader-scroll" ref={scrollRef} onScroll={onScroll}><div className={`continuous-document ${mode === "text" ? "text-document" : "pdf-document"}`} style={{ "--reader-font-size": `${fontSize}px`, "--reader-line-height": lineHeight, "--reader-width": `${textWidth}px` } as React.CSSProperties}>
+      {orderedPages.map(pageNo => <section className={`document-segment ${mode === "text" ? "text-segment" : "pdf-segment"}`} key={pageNo} data-page-segment={pageNo}>
+        {mode === "text" ? textByPage[pageNo] ? textByPage[pageNo].length ? <article className="reflow-text">{textByPage[pageNo].map((line, index) => <p data-line={index} key={index}>{line}</p>)}</article> : <LazyPdfPage pdf={pdf!} page={pageNo} active={activePages.has(pageNo)}/> : <div className="text-placeholder">{loadingPages.has(pageNo) ? "Preparando leitura…" : ""}</div> : <LazyPdfPage pdf={pdf!} page={pageNo} active={activePages.has(pageNo)}/>}
+      </section>)}
+      {error && <div className="error">{error}</div>}
+      <div className="chapter-navigation">{previousId ? <Link href={`/read/${previousId}`}><ChevronLeft size={17}/> Capítulo anterior</Link> : <span/>}{nextId ? <Link href={`/read/${nextId}`}>Próximo capítulo <ChevronRight size={17}/></Link> : <span/>}</div>
+    </div></div><footer className="reader-footer reader-progress-footer"><span>{series?.title || book?.title}</span><span>{volume?.volume_number ? `Volume ${volume.volume_number} · ` : ""}p. {currentPage} / {pages}</span></footer>
   </div>;
+}
+
+function LazyPdfPage({ pdf, page, active }: { pdf: PDFDocumentProxy; page: number; active: boolean }) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    if (!active || !hostRef.current || !canvasRef.current) return;
+    let cancelled = false; let task: { cancel: () => void; promise: Promise<unknown> } | null = null;
+    async function render() {
+      const pdfPage = await pdf.getPage(page); if (cancelled || !hostRef.current || !canvasRef.current) return;
+      const base = pdfPage.getViewport({ scale: 1 }); const scale = Math.min(hostRef.current.clientWidth, 940) / base.width; const ratio = Math.min(window.devicePixelRatio || 1, 2); const viewport = pdfPage.getViewport({ scale: scale * ratio }); const canvas = canvasRef.current;
+      if (!canvas) return; canvas.width = viewport.width; canvas.height = viewport.height; canvas.style.width = `${viewport.width / ratio}px`; canvas.style.height = `${viewport.height / ratio}px`;
+      task = pdfPage.render({ canvas, canvasContext: canvas.getContext("2d")!, viewport }); try { await task.promise; } catch { /* Canvas is discarded when outside the lazy window. */ }
+    }
+    void render(); return () => { cancelled = true; task?.cancel(); };
+  }, [pdf, page, active]);
+  return <div className="pdf-page" ref={hostRef}>{active ? <canvas ref={canvasRef} aria-label={`Página ${page} do PDF`}/> : <div className="pdf-placeholder"/>}</div>;
 }

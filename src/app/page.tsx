@@ -8,134 +8,181 @@ import type { User } from "@supabase/supabase-js";
 import { AuthGate } from "@/components/auth-gate";
 import { Nav } from "@/components/nav";
 import { BUCKET, supabase } from "@/lib/supabase";
-import { formatSize, type Book, type ReadingProgress } from "@/lib/types";
+import { formatSize, type Book, type ReadingProgress, type Series, type Volume } from "@/lib/types";
 
 export default function Home() { return <AuthGate>{user => <Dashboard user={user} />}</AuthGate>; }
 
 function Dashboard({ user }: { user: User }) {
   const [books, setBooks] = useState<Book[]>([]);
+  const [series, setSeries] = useState<Series[]>([]);
+  const [volumes, setVolumes] = useState<Volume[]>([]);
   const [progress, setProgress] = useState<Record<string, ReadingProgress>>({});
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadPercent, setUploadPercent] = useState(0);
   const [dragging, setDragging] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
+  const [coverFile, setCoverFile] = useState<File | null>(null);
+  const [coverUrls, setCoverUrls] = useState<Record<string, string>>({});
+  const [newTitle, setNewTitle] = useState("");
+  const [newDescription, setNewDescription] = useState("");
+  const [selectedSeries, setSelectedSeries] = useState("");
+  const [selectedVolume, setSelectedVolume] = useState("");
+  const [chapterNumber, setChapterNumber] = useState("");
+  const [chapterTitle, setChapterTitle] = useState("");
+  const [contentType, setContentType] = useState<"chapter" | "volume">("chapter");
+  const [inlineSeriesTitle, setInlineSeriesTitle] = useState("");
+  const [inlineVolumeNumber, setInlineVolumeNumber] = useState("");
+  const [inlineVolumeTitle, setInlineVolumeTitle] = useState("");
+  const [createSeriesInline, setCreateSeriesInline] = useState(false);
+  const [createVolumeInline, setCreateVolumeInline] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     const api = supabase();
-    const [bookResult, progressResult] = await Promise.all([
+    const [b, s, v, p] = await Promise.all([
       api.from("books").select("*").eq("owner_id", user.id).order("created_at", { ascending: false }),
+      api.from("series").select("*").eq("owner_id", user.id).order("title"),
+      api.from("volumes").select("*").eq("owner_id", user.id).order("sort_order").order("volume_number"),
       api.from("reading_progress").select("*").eq("owner_id", user.id),
     ]);
-    if (bookResult.error || progressResult.error) setError(bookResult.error?.message || progressResult.error?.message || "Erro ao carregar biblioteca.");
+    const failure = b.error || s.error || v.error || p.error;
+    if (failure) setError(failure.message);
     else {
-      setBooks((bookResult.data || []) as Book[]);
-      setProgress(Object.fromEntries(((progressResult.data || []) as ReadingProgress[]).map(item => [item.book_id, item])));
-      setError("");
+      setBooks((b.data || []) as Book[]); setSeries((s.data || []) as Series[]); setVolumes((v.data || []) as Volume[]);
+      setProgress(Object.fromEntries(((p.data || []) as ReadingProgress[]).map(item => [item.book_id, item]))); setError("");
+      const signedCovers = await Promise.all(((s.data || []) as Series[]).filter(item => item.cover_path).map(async item => {
+        const { data } = await api.storage.from("covers").createSignedUrl(item.cover_path!, 3600); return [item.id, data?.signedUrl || ""] as const;
+      }));
+      setCoverUrls(Object.fromEntries(signedCovers.filter(([, url]) => url)));
     }
     setLoading(false);
   }, [user.id]);
 
-  // Fetching the private library when the authenticated user changes.
+  // Load authenticated library data once the user is available.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { void load(); }, [load]);
 
-  async function uploadFile(file: File) {
-    if (uploading) return;
+  async function createSeries() {
+    const title = newTitle.trim();
+    if (!title) return;
+    setBusy(true); setError("");
+    const { data: created, error: saveError } = await supabase().from("series").insert({ owner_id: user.id, title, description: newDescription.trim() || null }).select().single();
+    if (saveError) setError(saveError.message); else {
+      if (coverFile && created) {
+        if (!["image/jpeg", "image/png", "image/webp"].includes(coverFile.type)) { setError("A capa deve estar no formato JPEG, PNG ou WebP."); setBusy(false); return; }
+        const ext = coverFile.type === "image/jpeg" ? "jpg" : coverFile.type.split("/")[1]; const path = `${user.id}/${created.id}/${crypto.randomUUID()}.${ext}`;
+        const { error: uploadError } = await supabase().storage.from("covers").upload(path, coverFile, { contentType: coverFile.type, upsert: false });
+        if (uploadError) setError(`Obra criada, mas a capa não foi enviada: ${uploadError.message}`);
+        else { const { error: coverError } = await supabase().from("series").update({ cover_path: path }).eq("id", created.id); if (coverError) setError(coverError.message); }
+      }
+      setNewTitle(""); setNewDescription(""); setCoverFile(null); setShowCreate(false); await load();
+    }
+    setBusy(false);
+  }
+
+  async function createSeriesFromUpload() {
+    const title = inlineSeriesTitle.trim(); if (!title) return;
+    const { data, error: saveError } = await supabase().from("series").insert({ owner_id: user.id, title }).select().single();
+    if (saveError) setError(saveError.message);
+    else { setSeries(previous => [...previous, data as Series]); setSelectedSeries(data.id); setCreateSeriesInline(false); setInlineSeriesTitle(""); }
+  }
+
+  async function createVolumeFromUpload() {
+    if (!selectedSeries || (!inlineVolumeNumber && !inlineVolumeTitle.trim())) return;
+    const number = inlineVolumeNumber ? Number(inlineVolumeNumber) : null;
+    const { data, error: saveError } = await supabase().from("volumes").insert({ owner_id: user.id, series_id: selectedSeries, volume_number: number, title: inlineVolumeTitle.trim() || null, sort_order: number ? Math.round(number * 1000) : volumes.length * 1000 }).select().single();
+    if (saveError) setError(saveError.message);
+    else { setVolumes(previous => [...previous, data as Volume]); setSelectedVolume(data.id); setCreateVolumeInline(false); setInlineVolumeNumber(""); setInlineVolumeTitle(""); }
+  }
+
+  async function editSeries(item: Series) {
+    const title = window.prompt("Nome da obra", item.title)?.trim();
+    if (!title || title === item.title) return;
+    const description = window.prompt("Descrição (opcional)", item.description || "");
+    if (description === null) return;
+    setBusy(true);
+    const { error: updateError } = await supabase().from("series").update({ title, description: description.trim() || null, updated_at: new Date().toISOString() }).eq("id", item.id).eq("owner_id", user.id);
+    if (updateError) setError(updateError.message); await load(); setBusy(false);
+  }
+
+  async function deleteSeries(item: Series) {
+    if (!window.confirm(`Excluir a organização “${item.title}”? Os PDFs e o progresso serão preservados e ficarão em “Sem coleção”.`)) return;
+    setBusy(true); const { error: deleteError } = await supabase().from("series").delete().eq("id", item.id).eq("owner_id", user.id);
+    if (deleteError) setError(deleteError.message); await load(); setBusy(false);
+  }
+
+  async function uploadFile() {
+    if (!file || uploading) return;
     setError("");
     if (!file.name.toLowerCase().endsWith(".pdf")) { setError("Escolha um arquivo PDF."); return; }
     const signature = new TextDecoder().decode(await file.slice(0, 5).arrayBuffer());
     if (signature !== "%PDF-") { setError("Este arquivo não parece ser um PDF válido."); return; }
-    const api = supabase();
-    const { data: { session } } = await api.auth.getSession();
+    const api = supabase(); const { data: { session } } = await api.auth.getSession();
     if (!session) { setError("Sua sessão expirou. Entre novamente."); return; }
-    const path = `${user.id}/${crypto.randomUUID()}.pdf`;
+    const path = `${user.id}/${selectedSeries || "unfiled"}/${selectedVolume || "unassigned"}/${crypto.randomUUID()}.pdf`;
     const endpoint = `${process.env.NEXT_PUBLIC_SUPABASE_URL!.replace(/\/$/, "")}/storage/v1/upload/resumable`;
-    setUploading(true);
-    setUploadPercent(0);
+    setUploading(true); setUploadPercent(0);
     try {
       await new Promise<void>((resolve, reject) => {
-        const upload = new Upload(file, {
-          endpoint,
-          headers: { authorization: `Bearer ${session.access_token}` },
-          retryDelays: [0, 3000, 5000, 10000, 20000],
-          chunkSize: 6 * 1024 * 1024,
-          uploadDataDuringCreation: true,
-          removeFingerprintOnSuccess: true,
-          metadata: { bucketName: BUCKET, objectName: path, contentType: "application/pdf", cacheControl: "3600" },
-          onError: reject,
-          onSuccess: () => resolve(),
-          onProgress: (sent, total) => setUploadPercent(Math.round(sent / total * 100)),
-        });
-        upload.findPreviousUploads().then(previous => {
-          if (previous.length) upload.resumeFromPreviousUpload(previous[0]);
-          upload.start();
-        }).catch(reject);
+        const upload = new Upload(file, { endpoint, headers: { authorization: `Bearer ${session.access_token}` }, retryDelays: [0, 3000, 5000, 10000, 20000], chunkSize: 6 * 1024 * 1024, uploadDataDuringCreation: true, removeFingerprintOnSuccess: true,
+          metadata: { bucketName: BUCKET, objectName: path, contentType: "application/pdf", cacheControl: "3600" }, onError: reject, onSuccess: () => resolve(), onProgress: (sent, total) => setUploadPercent(Math.round(sent / total * 100)) });
+        upload.findPreviousUploads().then(previous => { if (previous.length) upload.resumeFromPreviousUpload(previous[0]); upload.start(); }).catch(reject);
       });
-      const { error: insertError } = await api.from("books").insert({
-        owner_id: user.id,
-        title: file.name.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ").trim(),
-        original_filename: file.name,
-        file_path: path,
-        size_bytes: file.size,
-      });
-      if (insertError) {
-        await api.storage.from(BUCKET).remove([path]);
-        throw insertError;
-      }
-      await load();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Falha no upload.");
-    } finally {
-      setUploading(false);
-      if (inputRef.current) inputRef.current.value = "";
-    }
+      const { error: insertError } = await api.from("books").insert({ owner_id: user.id, title: chapterTitle.trim() || file.name.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ").trim(), original_filename: file.name, file_path: path, size_bytes: file.size, series_id: selectedSeries || null, volume_id: selectedVolume || null, chapter_number: chapterNumber ? Number(chapterNumber) : null, chapter_title: chapterTitle.trim() || null, sort_order: chapterNumber ? Math.round(Number(chapterNumber) * 1000) : 0, content_type: contentType });
+      if (insertError) { await api.storage.from(BUCKET).remove([path]); throw insertError; }
+      setFile(null); setChapterNumber(""); setChapterTitle(""); setShowUpload(false); await load();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Falha no upload."); }
+    finally { setUploading(false); if (inputRef.current) inputRef.current.value = ""; }
   }
 
   async function deleteBook(book: Book) {
-    if (!window.confirm(`Excluir “${book.title}” e seu progresso de leitura?`)) return;
-    setBusyId(book.id);
-    setError("");
-    const api = supabase();
+    if (!window.confirm(`Excluir o PDF “${book.title}” e seu progresso de leitura?`)) return;
+    setBusy(true); setError(""); const api = supabase();
     const { error: storageError } = await api.storage.from(BUCKET).remove([book.file_path]);
-    if (storageError) { setError(storageError.message); setBusyId(null); return; }
+    if (storageError) { setError(storageError.message); setBusy(false); return; }
     const { error: dbError } = await api.from("books").delete().eq("id", book.id).eq("owner_id", user.id);
-    if (dbError) setError(`PDF excluído, mas o registro não foi removido: ${dbError.message}`);
-    await load();
-    setBusyId(null);
+    if (dbError) setError(`PDF excluído, mas o registro não foi removido: ${dbError.message}`); await load(); setBusy(false);
   }
 
-  async function renameBook(book: Book) {
-    const title = window.prompt("Novo título", book.title)?.trim();
-    if (!title || title === book.title) return;
-    setBusyId(book.id);
-    const { error } = await supabase().from("books").update({ title }).eq("id", book.id).eq("owner_id", user.id);
-    if (error) setError(error.message);
-    await load();
-    setBusyId(null);
+  async function editBook(book: Book) {
+    const chapter_title = window.prompt("Título do capítulo", book.chapter_title || book.title)?.trim();
+    if (!chapter_title) return;
+    const num = window.prompt("Número do capítulo (opcional)", book.chapter_number?.toString() || "");
+    if (num === null) return;
+    const { error: updateError } = await supabase().from("books").update({ chapter_title, title: chapter_title, chapter_number: num.trim() ? Number(num) : null, sort_order: num.trim() ? Math.round(Number(num) * 1000) : book.sort_order }).eq("id", book.id).eq("owner_id", user.id);
+    if (updateError) setError(updateError.message); await load();
   }
 
-  const filtered = books.filter(book => book.title.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
-  const recent = books.find(book => progress[book.id]);
+  const match = (value: string) => value.toLocaleLowerCase().includes(query.toLocaleLowerCase());
+  const matchesBook = (book: Book) => match(book.title) || match(book.chapter_title || "") || (book.chapter_number !== null && match(`capítulo ${book.chapter_number}`)) || match(`${book.content_type === "volume" ? "volume" : "capítulo"} ${book.chapter_number ?? ""}`);
+  const groupedSeries = series.filter(item => match(item.title) || books.some(b => b.series_id === item.id && matchesBook(b)) || volumes.some(v => v.series_id === item.id && (match(`volume ${v.volume_number ?? ""}`) || match(v.title || ""))));
+  const looseBooks = books.filter(book => !book.series_id && matchesBook(book));
+  const recent = [...books].filter(book => progress[book.id]).sort((a, b) => (progress[b.id]?.updated_at || "").localeCompare(progress[a.id]?.updated_at || ""))[0];
+  const relevantVolumes = volumes.filter(v => v.series_id === selectedSeries);
 
   return <><Nav /><main className="dashboard">
-    <section className="hero">
-      <div><span className="eyebrow"><span className="tiny-star">✦</span> Biblioteca privada</span><h1>Suas histórias,<br /><em>no seu ritmo.</em></h1><p>Uma pausa na rotina. Um universo inteiro à sua espera.</p></div>
-      <div className="hero-art" aria-hidden="true"><div className="orbit orbit-one"/><div className="orbit orbit-two"/><BookOpen size={86} strokeWidth={1} /></div>
-    </section>
-
-    {recent && <section className="continue-card"><div className="continue-icon"><BookOpen size={24}/></div><div className="continue-copy"><span className="eyebrow">Continue lendo</span><strong>{recent.title}</strong><small>Página {progress[recent.id].page_number}{recent.total_pages ? ` de ${recent.total_pages}` : ""}</small></div><Link className="continue-link" href={`/read/${recent.id}`}>Retomar <ChevronRight size={18}/></Link></section>}
-
-    <section className="library-section"><div className="section-head"><div><span className="eyebrow">Seu acervo</span><h2>Biblioteca <span className="count">{books.length}</span></h2></div><button className="primary-button add-button" onClick={() => inputRef.current?.click()} disabled={uploading}><Plus size={18}/> Adicionar PDF</button></div>
-      <input ref={inputRef} type="file" accept=".pdf,application/pdf" hidden onChange={e => { const file = e.target.files?.[0]; if (file) void uploadFile(file); }} />
+    <section className="hero"><div><span className="eyebrow"><span className="tiny-star">✦</span> Biblioteca privada</span><h1>Suas histórias,<br /><em>no seu ritmo.</em></h1><p>Uma pausa na rotina. Um universo inteiro à sua espera.</p></div><div className="hero-art" aria-hidden="true"><div className="orbit orbit-one"/><div className="orbit orbit-two"/><BookOpen size={86} strokeWidth={1} /></div></section>
+    {recent && <section className="continue-card"><div className="continue-icon"><BookOpen size={24}/></div><div className="continue-copy"><span className="eyebrow">Continue lendo</span><strong>{series.find(s => s.id === recent.series_id)?.title || recent.title}</strong><small>{recent.chapter_number ? `Capítulo ${recent.chapter_number}` : `Página ${progress[recent.id].page_number}`}{recent.chapter_title ? ` · ${recent.chapter_title}` : ""}</small></div><Link className="continue-link" href={`/read/${recent.id}`}>Retomar <ChevronRight size={18}/></Link></section>}
+    <section className="library-section"><div className="section-head"><div><span className="eyebrow">Seu acervo</span><h2>Obras <span className="count">{series.length}</span></h2></div><div className="library-buttons"><button className="secondary-button" onClick={() => setShowCreate(true)}><Plus size={17}/> Nova obra</button><button className="primary-button add-button" onClick={() => setShowUpload(true)} disabled={uploading}><UploadCloud size={17}/> Adicionar capítulo</button></div></div>
       {error && <div className="error dashboard-error" role="alert">{error}<button aria-label="Fechar erro" onClick={() => setError("")}><X size={16}/></button></div>}
-      <div className="toolbar"><div className="search"><Search size={18}/><input aria-label="Buscar livros" placeholder="Buscar por título..." value={query} onChange={e => setQuery(e.target.value)} /></div><span className="muted">{books.length} {books.length === 1 ? "livro" : "livros"}</span></div>
-      <div className={`upload-zone ${dragging ? "dragging" : ""}`} onDragOver={e => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={e => { e.preventDefault(); setDragging(false); const file = e.dataTransfer.files[0]; if (file) void uploadFile(file); }} onClick={() => !uploading && inputRef.current?.click()} role="button" tabIndex={0} onKeyDown={e => { if (e.key === "Enter") inputRef.current?.click(); }}><UploadCloud size={22}/><span>{uploading ? `Enviando PDF… ${uploadPercent}%` : "Arraste um PDF aqui ou clique para escolher"}</span>{uploading && <div className="upload-track"><div style={{ width: `${uploadPercent}%` }}/></div>}</div>
-      {loading ? <p className="empty-state">Carregando biblioteca…</p> : filtered.length === 0 ? <div className="empty-state"><FilePlus2 size={32}/><h3>{query ? "Nenhum título encontrado" : "Sua biblioteca começa aqui"}</h3><p>{query ? "Tente outro termo de busca." : "Adicione seu primeiro PDF para começar a leitura."}</p></div> : <div className="book-grid">{filtered.map((book, index) => { const current = progress[book.id]; const percent = current && book.total_pages ? Math.min(100, Math.round(current.page_number / book.total_pages * 100)) : 0; return <article className="book-card" key={book.id}><Link href={`/read/${book.id}`} className={`book-cover cover-${index % 5}`}><div className="cover-lines"><i/><i/><i/></div><FileText size={42} strokeWidth={1.2}/><span>LIGHT NOVEL</span></Link><div className="book-info"><span className="book-type">PDF · {formatSize(book.size_bytes)}</span><Link href={`/read/${book.id}`} className="book-title">{book.title}</Link><span className="book-meta">{current ? `Página ${current.page_number}${book.total_pages ? ` de ${book.total_pages}` : ""}` : "Ainda não iniciado"}</span><div className="book-progress"><div style={{width: `${percent}%`}}/></div><div className="book-actions"><Link href={`/read/${book.id}`}>{current ? "Continuar leitura" : "Começar leitura"} <ChevronRight size={15}/></Link><button title="Renomear" aria-label={`Renomear ${book.title}`} disabled={busyId === book.id} onClick={() => void renameBook(book)}><Pencil size={15}/></button><button title="Excluir" aria-label={`Excluir ${book.title}`} disabled={busyId === book.id} onClick={() => void deleteBook(book)}><Trash2 size={15}/></button></div></div></article>; })}</div>}
-    </section>
-    <footer className="site-footer">nook. <span>Um capítulo de cada vez.</span></footer>
+      <div className="toolbar"><div className="search"><Search size={18}/><input aria-label="Buscar obras e capítulos" placeholder="Buscar obras, volumes ou capítulos…" value={query} onChange={e => setQuery(e.target.value)} /></div><span className="muted">{books.length} {books.length === 1 ? "PDF" : "PDFs"}</span></div>
+      {loading ? <p className="empty-state">Carregando biblioteca…</p> : <>
+        {groupedSeries.length > 0 && <div className="series-grid">{groupedSeries.map((item, index) => {
+          const inSeries = books.filter(b => b.series_id === item.id); const volumeCount = volumes.filter(v => v.series_id === item.id).length;
+          const lastBook = inSeries.filter(b => progress[b.id]).sort((a, b) => (progress[b.id]?.updated_at || "").localeCompare(progress[a.id]?.updated_at || ""))[0];
+          return <article className="series-card" key={item.id}><Link href={`/series/${item.id}`} className={`series-cover cover-${index % 5}`} style={coverUrls[item.id] ? { backgroundImage: `linear-gradient(0deg,#171518e8,transparent 70%),url("${coverUrls[item.id]}")`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}><span className="cover-glyph">✦</span><strong>{item.title}</strong><small>NUK · BIBLIOTECA PARTICULAR</small></Link><div className="series-copy"><div><Link href={`/series/${item.id}`} className="series-title">{item.title}</Link><p>{volumeCount} {volumeCount === 1 ? "volume" : "volumes"} · {inSeries.length} {inSeries.length === 1 ? "capítulo" : "capítulos"}</p></div>{lastBook && <small className="series-last">Última leitura · {lastBook.chapter_number ? `Cap. ${lastBook.chapter_number}` : `p. ${progress[lastBook.id].page_number}`}</small>}<div className="series-actions"><Link href={`/series/${item.id}`}>Abrir obra <ChevronRight size={15}/></Link><button aria-label={`Editar ${item.title}`} onClick={() => void editSeries(item)} disabled={busy}><Pencil size={15}/></button><button aria-label={`Excluir organização ${item.title}`} onClick={() => void deleteSeries(item)} disabled={busy}><Trash2 size={15}/></button></div></div></article>;
+        })}</div>}
+        {looseBooks.length > 0 && <section className="loose-section"><div className="section-head"><div><span className="eyebrow">PDFs antigos e não organizados</span><h2>Sem coleção <span className="count">{looseBooks.length}</span></h2></div></div><div className="loose-list">{looseBooks.map(book => { const current = progress[book.id]; return <article className="loose-row" key={book.id}><Link href={`/read/${book.id}`} className="loose-icon"><FileText size={20}/></Link><div className="loose-details"><Link href={`/read/${book.id}`}>{book.title}</Link><small>{formatSize(book.size_bytes)} · {current ? `Página ${current.page_number}` : "Ainda não iniciado"}</small></div><button onClick={() => void editBook(book)} aria-label="Editar metadados"><Pencil size={16}/></button><button onClick={() => void deleteBook(book)} aria-label="Excluir PDF"><Trash2 size={16}/></button></article>; })}</div></section>}
+        {!series.length && !looseBooks.length && <div className="empty-state"><FilePlus2 size={32}/><h3>{query ? "Nenhum resultado encontrado" : "Sua biblioteca começa aqui"}</h3><p>{query ? "Tente outro termo de busca." : "Crie uma obra ou envie um PDF para começar."}</p><button className="primary-button" onClick={() => setShowCreate(true)}><Plus size={17}/> Criar obra</button></div>}
+      </>}
+    </section><footer className="site-footer">nook. <span>Um capítulo de cada vez.</span></footer>
+    {showCreate && <div className="modal-backdrop" role="presentation" onMouseDown={e => { if (e.target === e.currentTarget) setShowCreate(false); }}><section className="form-modal" role="dialog" aria-modal="true" aria-labelledby="create-series-title"><button className="modal-close" onClick={() => setShowCreate(false)} aria-label="Fechar"><X size={19}/></button><span className="eyebrow">Nova coleção</span><h2 id="create-series-title">Criar obra</h2><label>Nome da obra<input value={newTitle} onChange={e => setNewTitle(e.target.value)} maxLength={300} autoFocus /></label><label>Descrição opcional<textarea value={newDescription} onChange={e => setNewDescription(e.target.value)} rows={3}/></label><label>Capa opcional (JPEG, PNG ou WebP)<input type="file" accept="image/jpeg,image/png,image/webp" onChange={e => setCoverFile(e.target.files?.[0] || null)}/></label><button className="primary-button" disabled={!newTitle.trim() || busy} onClick={() => void createSeries()}>{busy ? "Salvando…" : "Criar obra"}</button></section></div>}
+    {showUpload && <div className="modal-backdrop" role="presentation" onMouseDown={e => { if (e.target === e.currentTarget && !uploading) setShowUpload(false); }}><section className="form-modal upload-modal" role="dialog" aria-modal="true" aria-labelledby="upload-title"><button className="modal-close" onClick={() => !uploading && setShowUpload(false)} aria-label="Fechar"><X size={19}/></button><span className="eyebrow">Acrescentar ao acervo</span><h2 id="upload-title">Enviar PDF</h2><label>Obra<select value={selectedSeries} onChange={e => { setSelectedSeries(e.target.value); setSelectedVolume(""); }}><option value="">Sem coleção</option>{series.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}</select></label><button type="button" className="inline-create" onClick={() => setCreateSeriesInline(!createSeriesInline)}>+ Criar nova obra</button>{createSeriesInline && <div className="inline-create-row"><input aria-label="Nome da nova obra" placeholder="Nome da obra" value={inlineSeriesTitle} onChange={e => setInlineSeriesTitle(e.target.value)}/><button type="button" className="secondary-button" onClick={() => void createSeriesFromUpload()}>Criar</button></div>}<label>Volume<select value={selectedVolume} onChange={e => setSelectedVolume(e.target.value)} disabled={!selectedSeries}><option value="">Sem volume</option>{relevantVolumes.map(v => <option key={v.id} value={v.id}>{v.volume_number ? `Volume ${v.volume_number}` : v.title || "Volume"}</option>)}</select></label>{selectedSeries && <><button type="button" className="inline-create" onClick={() => setCreateVolumeInline(!createVolumeInline)}>+ Criar novo volume</button>{createVolumeInline && <div className="inline-create-row"><input aria-label="Número do novo volume" type="number" placeholder="Número" value={inlineVolumeNumber} onChange={e => setInlineVolumeNumber(e.target.value)}/><input aria-label="Título do novo volume" placeholder="Título (opcional)" value={inlineVolumeTitle} onChange={e => setInlineVolumeTitle(e.target.value)}/><button type="button" className="secondary-button" onClick={() => void createVolumeFromUpload()}>Criar</button></div>}</>}<label>Tipo do PDF<select value={contentType} onChange={e => setContentType(e.target.value as "chapter" | "volume")}><option value="chapter">Capítulo</option><option value="volume">Volume completo</option></select></label><div className="form-row"><label>Número do capítulo/volume<input type="number" min="0" step="any" value={chapterNumber} onChange={e => setChapterNumber(e.target.value)}/></label><label>Título<input value={chapterTitle} onChange={e => setChapterTitle(e.target.value)}/></label></div><label className="file-picker">Arquivo PDF<input ref={inputRef} type="file" accept=".pdf,application/pdf" onChange={e => setFile(e.target.files?.[0] || null)}/></label><div className={`upload-drop ${dragging ? "dragging" : ""}`} onDragOver={e => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={e => { e.preventDefault(); setDragging(false); setFile(e.dataTransfer.files[0] || null); }}><UploadCloud size={19}/>{uploading ? `Enviando… ${uploadPercent}%` : file?.name || "Arraste o PDF ou escolha acima"}{uploading && <div className="upload-track"><div style={{ width: `${uploadPercent}%` }}/></div>}</div><button className="primary-button" disabled={!file || uploading} onClick={() => void uploadFile()}>{uploading ? "Enviando…" : "Enviar PDF"}</button></section></div>}
   </main></>;
 }
