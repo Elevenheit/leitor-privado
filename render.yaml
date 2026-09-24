@@ -1,13 +1,15 @@
 services:
   - type: web
-    name: lightnovel-reader-privado
+    name: nook-closed-beta
     runtime: node
+    branch: feat/nook-closed-beta
+    autoDeployTrigger: off
     plan: free
     buildCommand: npm ci && npm run build
     startCommand: npm run start -- -p $PORT
     envVars:
       - key: NODE_VERSION
-        value: 22.16.0
+        value: 24.21.0
       - key: NEXT_PUBLIC_SUPABASE_URL
         sync: false
       - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
