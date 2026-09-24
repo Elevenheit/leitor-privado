@@ -25,55 +25,74 @@ export function Nav({ back = false }: { back?: boolean }) {
   }, []);
   return (
     <>
-      <header className="site-nav">
+      <header
+        className="site-nav"
+        onKeyDown={(event) => {
+          if (event.key === "Escape") setOpen(false);
+        }}
+      >
         <div className="nav-inner">
           <Link className="logo" href="/">
             <BookOpen size={20} />
             nook<span className="logo-dot">.</span>
           </Link>
+          <nav
+            id="primary-navigation"
+            className={`primary-nav ${open ? "is-open" : ""}`}
+            aria-label="Principal"
+          >
+            {links.slice(0, 6).map(([url, label]) => (
+              <Link
+                key={url}
+                href={url}
+                aria-current={path === url ? "page" : undefined}
+                onClick={() => setOpen(false)}
+              >
+                {label}
+              </Link>
+            ))}
+          </nav>
           <div className="nav-actions">
-            {back && <Link href="/">Biblioteca</Link>}
+            {back && (
+              <Link className="nav-back-link" href="/">
+                Biblioteca
+              </Link>
+            )}
             <button
               className="icon-button menu-toggle"
               aria-label={open ? "Fechar menu" : "Abrir menu"}
               aria-expanded={open}
-              aria-controls="main-nav"
+              aria-controls="primary-navigation"
               onClick={() => setOpen(!open)}
             >
               {open ? <X /> : <Menu />}
             </button>
-            <button
-              className="icon-button"
-              aria-label="Sair"
-              onClick={() => void supabase().auth.signOut()}
-            >
-              <LogOut size={18} />
-            </button>
+            <details className="profile-menu">
+              <summary aria-label="Abrir menu do perfil">
+                <span className="profile-menu-avatar">
+                  <BookOpen size={15} />
+                </span>
+                <span>Perfil</span>
+              </summary>
+              <div className="profile-menu-panel">
+                {links.slice(6).map(([url, label]) => (
+                  <Link
+                    key={url}
+                    href={url}
+                    aria-current={path === url ? "page" : undefined}
+                  >
+                    {label}
+                  </Link>
+                ))}
+                {admin && <Link href="/admin">Administrar acervo</Link>}
+                <button onClick={() => void supabase().auth.signOut()}>
+                  <LogOut size={15} /> Sair
+                </button>
+              </div>
+            </details>
           </div>
         </div>
       </header>
-      <nav
-        id="main-nav"
-        aria-label="Principal"
-        className={`side-nav ${open ? "is-open" : ""}`}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") setOpen(false);
-        }}
-      >
-        <span className="eyebrow">Entre histórias</span>
-        {links.map(([url, label]) => (
-          <Link
-            key={url}
-            href={url}
-            aria-current={path === url ? "page" : undefined}
-            onClick={() => setOpen(false)}
-          >
-            {label}
-          </Link>
-        ))}
-        {admin && <Link href="/admin">Administrar acervo</Link>}
-        <small>Um capítulo de cada vez.</small>
-      </nav>
     </>
   );
 }

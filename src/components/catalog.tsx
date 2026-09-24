@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { User } from "@supabase/supabase-js";
+import { Search } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { formats, mediaHref, type Format } from "@/lib/catalog";
 import type { Series, Book } from "@/lib/types";
@@ -119,53 +120,53 @@ export function Catalog({
       <Nav />
       <main className="dashboard beta-dashboard">
         <section className="catalog-heading">
-          <span className="eyebrow">Sua pausa favorita</span>
           <h1>
-            {format
-              ? formats[format]
-              : list
-                ? "Minha lista"
-                : "Que história te encontra hoje?"}
+            {format ? formats[format] : list ? "Minha lista" : "Biblioteca"}
           </h1>
-          <p>
-            {format
-              ? "Novas páginas, outros mundos. Encontre sua próxima história."
-              : list
-                ? "As histórias que você quer por perto."
-                : "Escolha um mundo para entrar. Continue no seu próprio ritmo."}
-          </p>
+          <label className="search catalog-search">
+            <Search size={17} aria-hidden="true" />
+            <input
+              aria-label={
+                format
+                  ? `Buscar em ${formats[format]}`
+                  : "Busca global de obras"
+              }
+              placeholder={
+                format ? `Buscar em ${formats[format]}...` : "Buscar obras..."
+              }
+              value={q}
+              onChange={(e) => {
+                setQ(e.target.value);
+                setPage(0);
+              }}
+            />
+          </label>
         </section>
-        {!format && !list && (
-          <>
-            <div className="category-grid">
-              {Object.entries(formats).map(([id, label], i) => (
-                <Link href={`/category/${id}`} key={id}>
-                  <span>0{i + 1} ↗</span>
-                  <h2>{label}</h2>
+        <nav className="category-tabs" aria-label="Categorias da biblioteca">
+          <Link href="/" aria-current={!format && !list ? "page" : undefined}>
+            Todos
+          </Link>
+          {Object.entries(formats).map(([id, label]) => (
+            <Link
+              href={`/category/${id}`}
+              key={id}
+              aria-current={format === id ? "page" : undefined}
+            >
+              {label}
+            </Link>
+          ))}
+        </nav>
+        {!format && !list && recent.length > 0 && (
+          <section className="library-section continue-section">
+            <h2>Continuar lendo ou assistindo</h2>
+            <div className="continue-grid">
+              {recent.map((b) => (
+                <Link className="continue-card" href={mediaHref(b)} key={b.id}>
+                  {b.title} <span aria-hidden="true">→</span>
                 </Link>
               ))}
             </div>
-            <section className="library-section">
-              <h2>Continuar lendo ou assistindo</h2>
-              {recent.length ? (
-                <div className="continue-grid">
-                  {recent.map((b) => (
-                    <Link
-                      className="continue-card"
-                      href={mediaHref(b)}
-                      key={b.id}
-                    >
-                      {b.title} →
-                    </Link>
-                  ))}
-                </div>
-              ) : (
-                <p className="muted">
-                  Sua próxima história começa no acervo abaixo.
-                </p>
-              )}
-            </section>
-          </>
+          </section>
         )}
         <section className="library-section">
           <div className="section-head">
@@ -176,25 +177,6 @@ export function Catalog({
                   ? "Guardados por você"
                   : "Explore o acervo"}
             </h2>
-            <label className="search">
-              <input
-                aria-label={
-                  format
-                    ? `Buscar em ${formats[format]}`
-                    : "Busca global de obras"
-                }
-                placeholder={
-                  format
-                    ? `Buscar em ${formats[format]}`
-                    : "Busca global de obras"
-                }
-                value={q}
-                onChange={(e) => {
-                  setQ(e.target.value);
-                  setPage(0);
-                }}
-              />
-            </label>
           </div>
           {error && (
             <p className="error" role="alert">
@@ -209,12 +191,10 @@ export function Catalog({
               Organizando suas histórias…
             </p>
           ) : !items.length ? (
-            <div className="empty-state">
-              <h3>Nenhuma história por aqui ainda.</h3>
+            <div className="empty-state catalog-empty">
+              <h3>Nenhuma obra por aqui ainda.</h3>
               <p>
-                {q
-                  ? "Tente outro título."
-                  : "Quando houver novidades, elas aparecem aqui."}
+                {q ? "Tente outro título." : "Novos títulos aparecerão aqui."}
               </p>
             </div>
           ) : (
@@ -276,9 +256,6 @@ export function Catalog({
             </button>
           </div>
         </section>
-        <footer className="site-footer">
-          nook. <span>Um capítulo de cada vez.</span>
-        </footer>
       </main>
     </>
   );
