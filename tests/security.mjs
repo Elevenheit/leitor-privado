@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 const db = new PGlite();
-const admin = "0b42c97b-0c71-48d8-9410-3d0b78fc5bb2",
+const admin = "43caebf0-0851-4939-978d-196aa05e80f2",
   a = "11111111-1111-4111-8111-111111111111",
   b = "22222222-2222-4222-8222-222222222222";
 await db.exec(`create role authenticated; create role anon; create schema auth; create schema storage;

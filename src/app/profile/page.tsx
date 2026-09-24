@@ -163,133 +163,234 @@ function Profile({ id }: { id: string }) {
     <>
       <Nav />
       <main className="dashboard profile-page">
-        <span className="eyebrow">Seu cantinho</span>
-        <h1>Meu perfil</h1>
-        <div className="profile-banner">
-          {bannerUrl && <img src={bannerUrl} alt="Seu banner" />}
-          <span className="profile-avatar">
-            {avatarUrl ? <img src={avatarUrl} alt="Seu avatar" /> : avatar}
-          </span>
-        </div>
-        <div className="profile-form">
-          <label>
-            Avatar (até 2 MB)
-            <input
-              disabled={busy}
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              onChange={(e) => void upload(e.target.files?.[0], "avatar_path")}
-            />
-          </label>
-          <label>
-            Banner (até 2 MB)
-            <input
-              disabled={busy}
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              onChange={(e) => void upload(e.target.files?.[0], "banner_path")}
-            />
-          </label>
-        </div>
-        <form className="profile-form" onSubmit={save}>
-          <label>
-            Nickname
-            <input
-              required
-              pattern="[a-z0-9_]{3,40}"
-              maxLength={40}
-              value={nickname}
-              onChange={(e) => setNickname(e.target.value)}
-            />
-          </label>
-          <label>
-            Nome exibido
-            <input
-              maxLength={80}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-          </label>
-          <label>
-            Bio
-            <textarea
-              maxLength={300}
-              value={bio}
-              onChange={(e) => setBio(e.target.value)}
-            />
-          </label>
-          <label>
-            Ícone
-            <select value={avatar} onChange={(e) => setAvatar(e.target.value)}>
-              {["✦", "☾", "❀", "◈"].map((x) => (
-                <option key={x}>{x}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Tema de leitura
-            <select value={theme} onChange={(e) => setTheme(e.target.value)}>
-              <option value="dark">Escuro</option>
-              <option value="sepia">Sépia</option>
-              <option value="light">Claro</option>
-            </select>
-          </label>
-          <label>
-            Fonte
-            <select
-              value={fontFamily}
-              onChange={(e) => setFontFamily(e.target.value)}
-            >
-              <option value="serif">Literária</option>
-              <option value="sans">Sem serifa</option>
-            </select>
-          </label>
-          <label>
-            Tamanho da fonte
-            <input
-              type="range"
-              min="16"
-              max="32"
-              value={fontSize}
-              onChange={(e) => setFontSize(Number(e.target.value))}
-            />
-          </label>
-          <button className="primary-button" disabled={busy}>
-            Salvar perfil
-          </button>
-        </form>
-        <p className="muted">
-          Favoritos, progresso e marcadores são privados. Seu nickname e ícone
-          aparecem na conversa das obras.
-        </p>
-        <h2>Trocar senha</h2>
-        <form className="profile-form" onSubmit={change}>
-          <label>
-            Senha atual
-            <input
-              type="password"
-              required
-              autoComplete="current-password"
-              value={current}
-              onChange={(e) => setCurrent(e.target.value)}
-            />
-          </label>
-          <label>
-            Nova senha
-            <input
-              type="password"
-              required
-              minLength={10}
-              autoComplete="new-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </label>
-          <button className="primary-button" disabled={busy}>
-            Atualizar senha
-          </button>
-        </form>
-        {message && <p role="status">{message}</p>}
+        <header className="profile-heading">
+          <span className="eyebrow">Seu cantinho</span>
+          <h1>Uma página com a sua cara.</h1>
+          <p>
+            Cuide dos detalhes do seu perfil e deixe sua leitura do seu jeito.
+          </p>
+        </header>
+        <section className="profile-identity-card">
+          <div className="profile-banner">
+            {bannerUrl && <img src={bannerUrl} alt="Seu banner" />}
+            <span className="profile-banner-label">Seu espaço no Nook</span>
+            <span className="profile-avatar">
+              {avatarUrl ? <img src={avatarUrl} alt="Seu avatar" /> : avatar}
+            </span>
+          </div>
+          <div className="profile-card-body">
+            <div className="profile-card-title">
+              <div>
+                <span className="eyebrow">Perfil de leitura</span>
+                <h2>{name || nickname || "Seu perfil"}</h2>
+              </div>
+              <div className="profile-summary">
+                <span className="profile-handle">
+                  @{nickname || "nickname"}
+                </span>
+                {bio && <p>{bio}</p>}
+              </div>
+            </div>
+            <form className="profile-form profile-fields" onSubmit={save}>
+              <div className="profile-field-grid">
+                <label>
+                  Nickname
+                  <input
+                    required
+                    pattern="[a-z0-9_]{3,40}"
+                    maxLength={40}
+                    value={nickname}
+                    onChange={(e) => setNickname(e.target.value)}
+                  />
+                  <small className="field-helper">
+                    3–40 caracteres · letras minúsculas, números e _
+                  </small>
+                </label>
+                <label>
+                  Nome exibido
+                  <input
+                    maxLength={80}
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                  />
+                </label>
+              </div>
+              <label>
+                Bio <span className="field-hint">{bio.length}/300</span>
+                <textarea
+                  maxLength={300}
+                  value={bio}
+                  onChange={(e) => setBio(e.target.value)}
+                  placeholder="Um pouco sobre você e suas histórias favoritas…"
+                />
+              </label>
+              <div className="profile-upload-grid">
+                <label className="upload-picker">
+                  <span className="upload-picker-icon">＋</span>
+                  <span>
+                    <strong>Alterar foto de perfil</strong>
+                    <small>JPEG, PNG ou WebP · até 2 MB</small>
+                  </span>
+                  <input
+                    disabled={busy}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    onChange={(e) =>
+                      void upload(e.target.files?.[0], "avatar_path")
+                    }
+                  />
+                </label>
+                <label className="upload-picker">
+                  <span className="upload-picker-icon">＋</span>
+                  <span>
+                    <strong>Alterar imagem de capa</strong>
+                    <small>JPEG, PNG ou WebP · até 2 MB</small>
+                  </span>
+                  <input
+                    disabled={busy}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    onChange={(e) =>
+                      void upload(e.target.files?.[0], "banner_path")
+                    }
+                  />
+                </label>
+              </div>
+              <div className="profile-field-block">
+                <span className="profile-label">Ícone</span>
+                <div
+                  className="choice-row icon-choices"
+                  role="group"
+                  aria-label="Ícone do perfil"
+                >
+                  {["✦", "☾", "❀", "◈"].map((icon) => (
+                    <button
+                      type="button"
+                      key={icon}
+                      aria-pressed={avatar === icon}
+                      onClick={() => setAvatar(icon)}
+                    >
+                      {icon}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="profile-save-row">
+                <p>
+                  Favoritos, progresso e marcadores são privados. Seu nickname e
+                  ícone aparecem na conversa das obras.
+                </p>
+                <button className="primary-button" disabled={busy}>
+                  {busy ? "Salvando…" : "Salvar alterações"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </section>
+        <section className="profile-settings-card">
+          <div className="profile-section-heading">
+            <span className="eyebrow">Conforto de leitura</span>
+            <h2>Do seu jeito</h2>
+            <p>Estas preferências ficam guardadas no seu perfil.</p>
+          </div>
+          <div className="profile-settings-grid">
+            <div className="profile-field-block">
+              <span className="profile-label">Tema de leitura</span>
+              <div
+                className="choice-row"
+                role="group"
+                aria-label="Tema de leitura"
+              >
+                {[
+                  ["dark", "Escuro"],
+                  ["sepia", "Sépia"],
+                  ["light", "Claro"],
+                ].map(([value, label]) => (
+                  <button
+                    type="button"
+                    key={value}
+                    aria-pressed={theme === value}
+                    onClick={() => setTheme(value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="profile-field-block">
+              <span className="profile-label">Fonte</span>
+              <div className="choice-row" role="group" aria-label="Fonte">
+                {[
+                  ["serif", "Literária"],
+                  ["sans", "Sem serifa"],
+                ].map(([value, label]) => (
+                  <button
+                    type="button"
+                    key={value}
+                    aria-pressed={fontFamily === value}
+                    onClick={() => setFontFamily(value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <label className="font-size-control">
+              Tamanho da fonte <span>{fontSize}px</span>
+              <input
+                type="range"
+                min="16"
+                max="32"
+                value={fontSize}
+                onChange={(e) => setFontSize(Number(e.target.value))}
+              />
+            </label>
+          </div>
+        </section>
+        <section className="profile-settings-card password-card">
+          <div className="profile-section-heading">
+            <span className="eyebrow">Segurança</span>
+            <h2>Trocar senha</h2>
+            <p>Escolha uma senha forte para proteger sua conta.</p>
+          </div>
+          <form
+            className="profile-form profile-password-form"
+            onSubmit={change}
+          >
+            <label>
+              Senha atual
+              <input
+                type="password"
+                required
+                autoComplete="current-password"
+                value={current}
+                onChange={(e) => setCurrent(e.target.value)}
+              />
+            </label>
+            <label>
+              Nova senha
+              <input
+                type="password"
+                required
+                minLength={10}
+                autoComplete="new-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </label>
+            <button className="secondary-button" disabled={busy}>
+              {busy ? "Atualizando…" : "Atualizar senha"}
+            </button>
+          </form>
+        </section>
+        {message && (
+          <p
+            className={`profile-message ${message.includes("Não foi possível") ? "is-error" : "is-success"}`}
+            role="status"
+          >
+            {message}
+          </p>
+        )}
       </main>
     </>
   );

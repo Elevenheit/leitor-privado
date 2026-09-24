@@ -17,9 +17,8 @@ export function About({ onClose }: { onClose?: () => void }) {
         história. O resto pode esperar.
       </p>
       <div className="category-grid">
-        {["Light Novels", "Mangás", "Manhwas", "Animes"].map((x, i) => (
+        {["Light Novels", "Mangás", "Manhwas", "Animes"].map((x) => (
           <article key={x}>
-            <span>0{i + 1}</span>
             <h2>{x}</h2>
           </article>
         ))}

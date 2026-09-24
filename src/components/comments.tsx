@@ -62,11 +62,35 @@ export function Comments({
     }
   }, [seriesId, page]);
   useEffect(() => {
+    let live = true;
     const timer = setTimeout(() => void load(), 0);
-    void supabase()
-      .rpc("beta_admin")
-      .then(({ data }) => setAdmin(Boolean(data)));
-    return () => clearTimeout(timer);
+    async function checkAdmin() {
+      try {
+        const api = supabase();
+        const { data: session } = await api.auth.getSession();
+        const currentUserId = session.session?.user.id;
+        if (!currentUserId) return;
+        const { data: access } = await api
+          .from("beta_access")
+          .select("role, expires_at, revoked")
+          .eq("user_id", currentUserId)
+          .maybeSingle();
+        const expiry = access?.expires_at;
+        const expiryTime = expiry ? Date.parse(expiry) : Number.NaN;
+        const active =
+          access?.revoked === false &&
+          (expiry === "infinity" ||
+            (Number.isFinite(expiryTime) && expiryTime > Date.now()));
+        if (live) setAdmin(active && access?.role === "admin");
+      } catch {
+        if (live) setAdmin(false);
+      }
+    }
+    void checkAdmin();
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
   }, [load]);
   async function submit(e: React.FormEvent) {
     e.preventDefault();

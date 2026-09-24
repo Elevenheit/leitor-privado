@@ -19,9 +19,33 @@ export function Nav({ back = false }: { back?: boolean }) {
   const [open, setOpen] = useState(false);
   const [admin, setAdmin] = useState(false);
   useEffect(() => {
-    void supabase()
-      .rpc("beta_admin")
-      .then(({ data }) => setAdmin(Boolean(data)));
+    let live = true;
+    async function checkAdmin() {
+      try {
+        const api = supabase();
+        const { data: session } = await api.auth.getSession();
+        const userId = session.session?.user.id;
+        if (!userId) return;
+        const { data: access } = await api
+          .from("beta_access")
+          .select("role, expires_at, revoked")
+          .eq("user_id", userId)
+          .maybeSingle();
+        const expiry = access?.expires_at;
+        const expiryTime = expiry ? Date.parse(expiry) : Number.NaN;
+        const active =
+          access?.revoked === false &&
+          (expiry === "infinity" ||
+            (Number.isFinite(expiryTime) && expiryTime > Date.now()));
+        if (live) setAdmin(active && access?.role === "admin");
+      } catch {
+        if (live) setAdmin(false);
+      }
+    }
+    void checkAdmin();
+    return () => {
+      live = false;
+    };
   }, []);
   return (
     <>

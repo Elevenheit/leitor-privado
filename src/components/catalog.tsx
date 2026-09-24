@@ -1,9 +1,9 @@
-/* eslint-disable @next/next/no-img-element -- Private signed and blob URLs must stay in the browser, avoiding an image proxy. */
+﻿/* eslint-disable @next/next/no-img-element -- Private signed and blob URLs must stay in the browser, avoiding an image proxy. */
 "use client";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { Search } from "lucide-react";
+import { ArrowUpRight, BookOpen, Clapperboard, Search } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { formats, mediaHref, type Format } from "@/lib/catalog";
 import type { Series, Book } from "@/lib/types";
@@ -89,7 +89,7 @@ export function Catalog({
       } catch {
         if (live)
           setError(
-            "Não foi possível carregar a biblioteca. Confira a conexão e tente novamente.",
+            "NÃ£o foi possÃ­vel carregar a biblioteca. Confira a conexÃ£o e tente novamente.",
           );
       } finally {
         if (live) setLoading(false);
@@ -112,7 +112,7 @@ export function Catalog({
       : await supabase()
           .from("favorites")
           .upsert({ owner_id: user.id, series_id: id });
-    if (r.error) setError("Não foi possível salvar sua lista.");
+    if (r.error) setError("NÃ£o foi possÃ­vel salvar sua lista.");
     else setFavs((old) => (had ? old.filter((x) => x !== id) : [...old, id]));
   }
   return (
@@ -132,7 +132,7 @@ export function Catalog({
                   : "Busca global de obras"
               }
               placeholder={
-                format ? `Buscar em ${formats[format]}...` : "Buscar obras..."
+                format ? `Buscar em ${formats[format]}...` : "Buscar no Nook"
               }
               value={q}
               onChange={(e) => {
@@ -162,7 +162,20 @@ export function Catalog({
             <div className="continue-grid">
               {recent.map((b) => (
                 <Link className="continue-card" href={mediaHref(b)} key={b.id}>
-                  {b.title} <span aria-hidden="true">→</span>
+                  <span className="continue-icon" aria-hidden="true">
+                    {b.media_type === "video" ? (
+                      <Clapperboard size={21} />
+                    ) : (
+                      <BookOpen size={21} />
+                    )}
+                  </span>
+                  <span className="continue-copy">
+                    <small>RETOMAR SUA HISTÃ“RIA</small>
+                    <strong>{b.title}</strong>
+                  </span>
+                  <span className="continue-link">
+                    Continuar <ArrowUpRight size={16} />
+                  </span>
                 </Link>
               ))}
             </div>
@@ -172,9 +185,9 @@ export function Catalog({
           <div className="section-head">
             <h2>
               {format
-                ? "Recém adicionados"
+                ? "RecÃ©m adicionados"
                 : list
-                  ? "Guardados por você"
+                  ? "Guardados por vocÃª"
                   : "Explore o acervo"}
             </h2>
           </div>
@@ -188,13 +201,15 @@ export function Catalog({
           )}
           {loading ? (
             <p className="empty-state" role="status">
-              Organizando suas histórias…
+              Organizando suas histÃ³riasâ€¦
             </p>
           ) : !items.length ? (
             <div className="empty-state catalog-empty">
               <h3>Nenhuma obra por aqui ainda.</h3>
               <p>
-                {q ? "Tente outro título." : "Novos títulos aparecerão aqui."}
+                {q
+                  ? "Tente outro tÃ­tulo."
+                  : "Novos tÃ­tulos aparecerÃ£o aqui."}
               </p>
             </div>
           ) : (
@@ -213,7 +228,9 @@ export function Catalog({
                       />
                     ) : (
                       <>
-                        <span className="cover-glyph">✦</span>
+                        <span className="cover-glyph" aria-hidden="true">
+                          ✦
+                        </span>
                         <strong>{s.title}</strong>
                       </>
                     )}
