@@ -41,6 +41,7 @@ function Reader({ user, id }: { user: User; id: string }) {
   const [showIllustrations, setShowIllustrations] = useState(true);
   const [textByPage, setTextByPage] = useState<Record<number, ReadingBlock[]>>({});
   const [illustrationsByPage, setIllustrationsByPage] = useState<Record<number, ReaderIllustration[]>>({});
+  const [illustrationStatus, setIllustrationStatus] = useState<Record<number, "loading" | "complete">>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [activePages, setActivePages] = useState<Set<number>>(new Set([1, 2, 3]));
   const [loadingPages, setLoadingPages] = useState<Set<number>>(new Set());
@@ -177,15 +178,25 @@ function Reader({ user, id }: { user: User; id: string }) {
 
   useEffect(() => {
     if (!illustrationExtractor || mode !== "text" || !showIllustrations) return;
-    let cancelled = false;
-    for (const pageNo of activePages) {
-      if (textByPage[pageNo] === undefined) continue;
-      void illustrationExtractor.get(pageNo).then(images => {
-        if (!cancelled && images.length) setIllustrationsByPage(previous => ({ ...previous, [pageNo]: images }));
+    const pagesToExtract = [...activePages].filter(pageNo => textByPage[pageNo] !== undefined
+      && illustrationStatus[pageNo] !== "loading" && illustrationStatus[pageNo] !== "complete");
+    if (!pagesToExtract.length) return;
+    // Mark pages before starting async extraction so the empty-text fallback cannot flash early.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setIllustrationStatus(previous => {
+      const next = { ...previous };
+      for (const pageNo of pagesToExtract) next[pageNo] = "loading";
+      return next;
+    });
+    for (const pageNo of pagesToExtract) {
+      const hasReadableText = textByPage[pageNo].length > 0;
+      void illustrationExtractor.get(pageNo, hasReadableText).then(images => {
+        if (images.length) setIllustrationsByPage(previous => ({ ...previous, [pageNo]: images }));
+      }).finally(() => {
+        setIllustrationStatus(previous => ({ ...previous, [pageNo]: "complete" }));
       });
     }
-    return () => { cancelled = true; };
-  }, [illustrationExtractor, mode, showIllustrations, activePages, textByPage]);
+  }, [illustrationExtractor, mode, showIllustrations, activePages, textByPage, illustrationStatus]);
 
   useEffect(() => {
     const root = scrollRef.current; const saved = restoringRef.current;
@@ -283,7 +294,7 @@ function Reader({ user, id }: { user: User; id: string }) {
       {settingsOpen && <div className="reader-settings" id="reader-settings"><div className="reader-settings-title">Ajustes de leitura</div><div className="reader-controls"><div className="font-tools"><span>Fonte</span><div><button aria-label="Diminuir fonte" onClick={() => updatePrefs({ fontSize: Math.max(15, fontSize - 1) })}><Minus size={15}/></button><span>{fontSize}px</span><button aria-label="Aumentar fonte" onClick={() => updatePrefs({ fontSize: Math.min(30, fontSize + 1) })}><Plus size={15}/></button></div></div><label className="reader-select">Linha<select aria-label="Altura da linha" value={lineHeight} onChange={e => updatePrefs({ lineHeight: Number(e.target.value) })}><option value={1.65}>Compacta</option><option value={1.85}>Confortável</option><option value={2.05}>Ampla</option></select></label><label className="reader-select">Largura<select aria-label="Largura do texto" value={textWidth} onChange={e => updatePrefs({ textWidth: Number(e.target.value) })}><option value={700}>Estreita</option><option value={760}>Padrão</option><option value={820}>Ampla</option></select></label><label className="reader-select">Tema<select aria-label="Tema do leitor" value={theme} onChange={e => updatePrefs({ theme: e.target.value as Theme })}><option value="dark">Escuro</option><option value="sepia">Sépia</option><option value="light">Claro</option></select></label><label className="reader-select">Ilustrações<select aria-label="Ilustrações no modo texto" value={showIllustrations ? "show" : "hide"} onChange={e => updatePrefs({ showIllustrations: e.target.value === "show" })}><option value="show">Mostrar</option><option value="hide">Ocultar</option></select></label></div></div>}</div>
     <div className="reader-scroll" ref={scrollRef} onScroll={onScroll}><div className={`continuous-document ${mode === "text" ? "text-document" : "pdf-document"}`} style={{ "--reader-font-size": `${fontSize}px`, "--reader-line-height": lineHeight, "--reader-width": `${textWidth}px` } as React.CSSProperties}>
       {orderedPages.map(pageNo => <section className={`document-segment ${mode === "text" ? "text-segment" : "pdf-segment"}`} key={pageNo} data-page-segment={pageNo}>
-        {mode === "text" ? textByPage[pageNo] !== undefined ? textByPage[pageNo].length || (showIllustrations && illustrationsByPage[pageNo]?.length) ? <article className="reflow-text">{textByPage[pageNo].map((block, index) => block.kind === "heading" ? <h2 data-line={index} key={index}>{block.text}</h2> : <p data-line={index} key={index}>{block.text}</p>)}{showIllustrations && illustrationsByPage[pageNo]?.map(illustration => <InlineIllustration key={illustration.src} illustration={illustration}/>)}</article> : <div className="text-only-note">Página {pageNo} sem texto extraível. <button onClick={() => setView("page")}>Ver no PDF</button></div> : <div className="text-placeholder">{loadingPages.has(pageNo) ? "Preparando leitura…" : ""}</div> : <LazyPdfPage pdf={pdf!} page={pageNo} active={activePages.has(pageNo)}/>}
+        {mode === "text" ? textByPage[pageNo] !== undefined ? textByPage[pageNo].length || (showIllustrations && illustrationsByPage[pageNo]?.length) ? <article className="reflow-text">{textByPage[pageNo].map((block, index) => block.kind === "heading" ? <h2 data-line={index} key={index}>{block.text}</h2> : <p data-line={index} key={index}>{block.text}</p>)}{showIllustrations && illustrationsByPage[pageNo]?.map(illustration => <InlineIllustration key={illustration.src} illustration={illustration}/>)}</article> : showIllustrations && illustrationStatus[pageNo] !== "complete" ? <div className="text-placeholder illustration-pending" aria-live="polite" aria-label="Verificando ilustração"/> : <div className="text-only-note">Página {pageNo} sem texto extraível. <button onClick={() => setView("page")}>Ver no PDF</button></div> : <div className="text-placeholder">{loadingPages.has(pageNo) ? "Preparando leitura…" : ""}</div> : <LazyPdfPage pdf={pdf!} page={pageNo} active={activePages.has(pageNo)}/>}
       </section>)}
       {error && <div className="error">{error}</div>}
       <div className="chapter-navigation"><span>Fim do capítulo</span><div>{previousId ? <Link href={`/read/${previousId}`}><ChevronLeft size={17}/> Capítulo anterior</Link> : <span/>}<button onClick={() => setIndexOpen(true)}>Índice</button>{nextId ? <Link href={`/read/${nextId}`}>Próximo capítulo <ChevronRight size={17}/></Link> : <span/>}</div></div>

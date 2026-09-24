@@ -270,6 +270,7 @@ a { color:inherit; text-decoration:none; }
 .reader-app .pdf-document { --reader-document-top:24px; width:min(calc(100% - 36px),940px); }
 .reader-app .text-segment { min-height:0; }
 .reader-app .text-placeholder { min-height:45vh; color:var(--reader-muted); font-size:12px; }
+.reader-app .text-placeholder.illustration-pending { min-height:12vh; }
 .reader-app .reflow-text { margin:0; color:var(--reader-ink); font-family:var(--font-literary); font-size:var(--reader-font-size); font-weight:400; line-height:var(--reader-line-height); letter-spacing:normal; font-kerning:normal; text-rendering:optimizeLegibility; -webkit-font-smoothing:antialiased; overflow:visible; }
 .reader-app .reflow-text p { margin:0 0 1.12em; overflow-wrap:break-word; hyphens:none; }
 .reader-app .reflow-text p:last-child { margin-bottom:1.12em; }
