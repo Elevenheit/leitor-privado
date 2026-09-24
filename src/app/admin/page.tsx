@@ -151,14 +151,15 @@ function Dashboard({ user }: { user: User }) {
     setBusy(true);
     setError("");
     const { data: created, error: saveError } = await supabase()
-      .from("series")
-      .insert({
-        owner_id: user.id,
-        title,
-        description: newDescription.trim() || null,
-      })
-      .select()
-      .single();
+  .from("series")
+  .insert({
+    owner_id: user.id,
+    title,
+    description: newDescription.trim() || null,
+    beta_visible: true,
+  })
+  .select()
+  .single();
     if (saveError) setError(saveError.message);
     else {
       if (coverFile && created) {
@@ -205,10 +206,14 @@ function Dashboard({ user }: { user: User }) {
     const title = inlineSeriesTitle.trim();
     if (!title) return;
     const { data, error: saveError } = await supabase()
-      .from("series")
-      .insert({ owner_id: user.id, title })
-      .select()
-      .single();
+  .from("series")
+  .insert({
+    owner_id: user.id,
+    title,
+    beta_visible: true,
+  })
+  .select()
+  .single();
     if (saveError) setError(saveError.message);
     else {
       setSeries((previous) => [...previous, data as Series]);
