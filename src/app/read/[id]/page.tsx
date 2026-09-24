@@ -2,12 +2,14 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight, Minus, Plus, Settings2, Type } from "lucide-react";
+import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight, List, Maximize2, Minus, Plus, Settings2, Type } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 import type { User } from "@supabase/supabase-js";
 import { AuthGate } from "@/components/auth-gate";
 import { Nav } from "@/components/nav";
+import { ReaderIndex } from "@/components/reader/reader-index";
+import { sortBooks } from "@/lib/reader-navigation";
 import { BUCKET, supabase } from "@/lib/supabase";
 import { extractReadingBlocks, type ReadingBlock } from "@/lib/reader-text";
 import type { Book, ReadingProgress, Series, Volume } from "@/lib/types";
@@ -43,6 +45,13 @@ function Reader({ user, id }: { user: User; id: string }) {
   const [saveState, setSaveState] = useState("Salvo");
   const [previousId, setPreviousId] = useState<string | null>(null);
   const [nextId, setNextId] = useState<string | null>(null);
+  const [libraryBooks, setLibraryBooks] = useState<Book[]>([]);
+  const [libraryVolumes, setLibraryVolumes] = useState<Volume[]>([]);
+  const [libraryProgress, setLibraryProgress] = useState<Record<string, ReadingProgress>>({});
+  const [indexOpen, setIndexOpen] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
+  const [focusControlsVisible, setFocusControlsVisible] = useState(false);
+  const focusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pageRef = useRef(1);
@@ -96,15 +105,17 @@ function Reader({ user, id }: { user: User; id: string }) {
         restoringRef.current = saved ? { page: start, line: saved.line_index || 0, ratio: saved.scroll_ratio || 0 } : null;
         setMode(saved?.reading_mode || "text"); modeRef.current = saved?.reading_mode || "text";
         setActivePages(new Set([Math.max(1, start - 1), start, Math.min(loaded.numPages, start + 1)]));
-        const [allBooks, allVolumes] = await Promise.all([
-          current.series_id ? api.from("books").select("id, series_id, volume_id, chapter_number, sort_order, created_at").eq("owner_id", user.id).eq("series_id", current.series_id) : api.from("books").select("id, series_id, volume_id, chapter_number, sort_order, created_at").eq("owner_id", user.id),
-          current.series_id ? api.from("volumes").select("id, series_id, volume_number, sort_order").eq("owner_id", user.id).eq("series_id", current.series_id) : Promise.resolve({ data: [] as Pick<Volume, "id" | "series_id" | "volume_number" | "sort_order">[], error: null }),
+        const [allBooks, allVolumes, allProgress] = await Promise.all([
+          current.series_id ? api.from("books").select("*").eq("owner_id", user.id).eq("series_id", current.series_id) : api.from("books").select("*").eq("owner_id", user.id).is("series_id", null),
+          current.series_id ? api.from("volumes").select("*").eq("owner_id", user.id).eq("series_id", current.series_id) : Promise.resolve({ data: [] as Volume[], error: null }),
+          api.from("reading_progress").select("*").eq("owner_id", user.id),
         ]);
         if (!cancelled && allBooks.data) {
-          const volumeList = (allVolumes.data || []) as Pick<Volume, "id" | "series_id" | "volume_number" | "sort_order">[];
-          const bookList = [...allBooks.data] as Pick<Book, "id" | "series_id" | "volume_id" | "chapter_number" | "sort_order" | "created_at">[];
-          const volOrder = (value: string | null) => volumeList.find(v => v.id === value)?.sort_order ?? volumeList.find(v => v.id === value)?.volume_number ?? -1;
-          bookList.sort((a, b) => Number(volOrder(a.volume_id)) - Number(volOrder(b.volume_id)) || Number(a.chapter_number ?? a.sort_order) - Number(b.chapter_number ?? b.sort_order) || a.created_at.localeCompare(b.created_at));
+          const volumeList = (allVolumes.data || []) as Volume[];
+          const bookList = sortBooks(allBooks.data as Book[], volumeList);
+          setLibraryBooks(bookList); setLibraryVolumes(volumeList);
+          const bookIds = new Set(bookList.map(item => item.id));
+          setLibraryProgress(Object.fromEntries(((allProgress.data || []) as ReadingProgress[]).filter(item => bookIds.has(item.book_id)).map(item => [item.book_id, item])));
           const index = bookList.findIndex(item => item.id === id);
           setPreviousId(index > 0 ? bookList[index - 1].id : null); setNextId(index >= 0 && index < bookList.length - 1 ? bookList[index + 1].id : null);
         }
@@ -174,6 +185,26 @@ function Reader({ user, id }: { user: User; id: string }) {
     return () => { document.removeEventListener("visibilitychange", onVisibility); if (saveTimer.current) clearTimeout(saveTimer.current); void save(); };
   }, [save]);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
+      if (event.key === "Escape") { setFocusMode(false); setFocusControlsVisible(false); setIndexOpen(false); return; }
+      if (event.key.toLowerCase() === "f" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault(); setFocusMode(value => !value); setFocusControlsVisible(false);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => { document.removeEventListener("keydown", onKeyDown); if (focusTimer.current) clearTimeout(focusTimer.current); };
+  }, []);
+
+  function revealFocusControls() {
+    if (!focusMode) return;
+    setFocusControlsVisible(true);
+    if (focusTimer.current) clearTimeout(focusTimer.current);
+    focusTimer.current = setTimeout(() => setFocusControlsVisible(false), 2800);
+  }
+
   function onScroll() {
     if (restoringRef.current) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -190,16 +221,17 @@ function Reader({ user, id }: { user: User; id: string }) {
   if (error && !book) return <><Nav back/><main className="reader-status"><BookOpen size={34}/><h1>Não foi possível abrir</h1><p>{error}</p><Link href="/" className="primary-button">Voltar à biblioteca</Link></main></>;
 
   const pageCaption = book?.content_type === "volume" ? `Volume completo${book.chapter_number ? ` ${book.chapter_number}` : ""}${book.chapter_title ? ` · ${book.chapter_title}` : ""}` : book?.chapter_number ? `Capítulo ${book.chapter_number}${book.chapter_title ? ` · ${book.chapter_title}` : ""}` : book?.chapter_title || book?.title;
-  return <div className={`reader-app reader-theme-${theme}`}><header className="reader-topbar"><button className="reader-back" aria-label="Voltar à biblioteca" onClick={() => router.push(series ? `/series/${series.id}` : "/")}><ArrowLeft size={18}/><span>Biblioteca</span></button><div className="reader-heading"><strong>{series?.title || book?.title}</strong><span>{volume ? (volume.volume_number ? `Volume ${volume.volume_number}` : volume.title) : ""}{volume ? " · " : ""}{pageCaption}</span></div><span className="save-state" aria-live="polite">{saveState}</span></header>
-    <div className="reader-toolbar"><div className="mode-toggle" role="group" aria-label="Modo de leitura"><button className={mode === "text" ? "selected" : ""} aria-pressed={mode === "text"} title="Leitura limpa, apenas texto" onClick={() => setView("text")}><Type size={15}/> Texto</button><button className={mode === "page" ? "selected" : ""} aria-pressed={mode === "page"} title="Visualização fiel às páginas do PDF" onClick={() => setView("page")}><BookOpen size={15}/> PDF</button></div><div className="reader-toolbar-end"><span className="reader-page-count">p. {currentPage} / {pages}</span><button className={`reader-settings-button ${settingsOpen ? "active" : ""}`} aria-label="Ajustes de leitura" aria-expanded={settingsOpen} aria-controls="reader-settings" onClick={() => setSettingsOpen(value => !value)}><Settings2 size={17}/><span>Ajustes</span></button></div>
+  return <div className={`reader-app reader-theme-${theme} ${focusMode ? "focus-mode" : ""} ${focusControlsVisible ? "focus-controls-visible" : ""}`} onMouseMove={revealFocusControls} onTouchStart={revealFocusControls}><header className="reader-topbar"><button className="reader-back" aria-label="Voltar à biblioteca" onClick={() => router.push(series ? `/series/${series.id}` : "/")}><ArrowLeft size={18}/><span>Biblioteca</span></button><div className="reader-heading"><strong>{series?.title || book?.title}</strong><span>{volume ? (volume.volume_number ? `Volume ${volume.volume_number}` : volume.title) : ""}{volume ? " · " : ""}{pageCaption}</span></div><span className="save-state" aria-live="polite">{saveState}</span></header>
+    <div className="reader-toolbar"><div className="mode-toggle" role="group" aria-label="Modo de leitura"><button className={mode === "text" ? "selected" : ""} aria-pressed={mode === "text"} title="Leitura limpa, apenas texto" onClick={() => setView("text")}><Type size={15}/> Texto</button><button className={mode === "page" ? "selected" : ""} aria-pressed={mode === "page"} title="Visualização fiel às páginas do PDF" onClick={() => setView("page")}><BookOpen size={15}/> PDF</button></div><div className="reader-quick-nav"><Link href={previousId ? `/read/${previousId}` : "#"} aria-disabled={!previousId} onClick={event => { if (!previousId) event.preventDefault(); }} aria-label="Capítulo anterior"><ChevronLeft size={18}/></Link><button onClick={() => setIndexOpen(true)}><List size={16}/><span>Índice</span></button><Link href={nextId ? `/read/${nextId}` : "#"} aria-disabled={!nextId} onClick={event => { if (!nextId) event.preventDefault(); }} aria-label="Próximo capítulo"><ChevronRight size={18}/></Link></div><div className="reader-toolbar-end"><span className="reader-page-count">p. {currentPage} / {pages}</span><button className="reader-settings-button" aria-label={focusMode ? "Sair do modo foco" : "Ativar modo foco"} aria-pressed={focusMode} title="Modo foco (F)" onClick={() => { setFocusMode(value => !value); setFocusControlsVisible(false); }}><Maximize2 size={16}/></button><button className={`reader-settings-button ${settingsOpen ? "active" : ""}`} aria-label="Ajustes de leitura" aria-expanded={settingsOpen} aria-controls="reader-settings" onClick={() => setSettingsOpen(value => !value)}><Settings2 size={17}/><span>Ajustes</span></button></div>
       {settingsOpen && <div className="reader-settings" id="reader-settings"><div className="reader-settings-title">Ajustes de leitura</div><div className="reader-controls"><div className="font-tools"><span>Fonte</span><div><button aria-label="Diminuir fonte" onClick={() => updatePrefs({ fontSize: Math.max(15, fontSize - 1) })}><Minus size={15}/></button><span>{fontSize}px</span><button aria-label="Aumentar fonte" onClick={() => updatePrefs({ fontSize: Math.min(30, fontSize + 1) })}><Plus size={15}/></button></div></div><label className="reader-select">Linha<select aria-label="Altura da linha" value={lineHeight} onChange={e => updatePrefs({ lineHeight: Number(e.target.value) })}><option value={1.65}>Compacta</option><option value={1.85}>Confortável</option><option value={2.05}>Ampla</option></select></label><label className="reader-select">Largura<select aria-label="Largura do texto" value={textWidth} onChange={e => updatePrefs({ textWidth: Number(e.target.value) })}><option value={700}>Estreita</option><option value={760}>Padrão</option><option value={820}>Ampla</option></select></label><label className="reader-select">Tema<select aria-label="Tema do leitor" value={theme} onChange={e => updatePrefs({ theme: e.target.value as Theme })}><option value="dark">Escuro</option><option value="sepia">Sépia</option><option value="light">Claro</option></select></label></div></div>}</div>
     <div className="reader-scroll" ref={scrollRef} onScroll={onScroll}><div className={`continuous-document ${mode === "text" ? "text-document" : "pdf-document"}`} style={{ "--reader-font-size": `${fontSize}px`, "--reader-line-height": lineHeight, "--reader-width": `${textWidth}px` } as React.CSSProperties}>
       {orderedPages.map(pageNo => <section className={`document-segment ${mode === "text" ? "text-segment" : "pdf-segment"}`} key={pageNo} data-page-segment={pageNo}>
         {mode === "text" ? textByPage[pageNo] !== undefined ? textByPage[pageNo].length ? <article className="reflow-text">{textByPage[pageNo].map((block, index) => block.kind === "heading" ? <h2 data-line={index} key={index}>{block.text}</h2> : <p data-line={index} key={index}>{block.text}</p>)}</article> : <div className="text-only-note">Página {pageNo} sem texto extraível. <button onClick={() => setView("page")}>Ver no PDF</button></div> : <div className="text-placeholder">{loadingPages.has(pageNo) ? "Preparando leitura…" : ""}</div> : <LazyPdfPage pdf={pdf!} page={pageNo} active={activePages.has(pageNo)}/>}
       </section>)}
       {error && <div className="error">{error}</div>}
-      <div className="chapter-navigation">{previousId ? <Link href={`/read/${previousId}`}><ChevronLeft size={17}/> Capítulo anterior</Link> : <span/>}{nextId ? <Link href={`/read/${nextId}`}>Próximo capítulo <ChevronRight size={17}/></Link> : <span/>}</div>
+      <div className="chapter-navigation"><span>Fim do capítulo</span><div>{previousId ? <Link href={`/read/${previousId}`}><ChevronLeft size={17}/> Capítulo anterior</Link> : <span/>}<button onClick={() => setIndexOpen(true)}>Índice</button>{nextId ? <Link href={`/read/${nextId}`}>Próximo capítulo <ChevronRight size={17}/></Link> : <span/>}</div></div>
     </div></div>
+    {indexOpen && <ReaderIndex series={series} volumes={libraryVolumes} books={libraryBooks} progress={libraryProgress} currentId={id} onClose={() => setIndexOpen(false)}/>}
   </div>;
 }
 
