@@ -6,9 +6,9 @@ type PdfTextItem = {
   width?: number;
 };
 
-export type ReadingBlock = { text: string; kind: "paragraph" | "heading" };
+export type ReadingBlock = { text: string; kind: "paragraph" | "heading"; position: number };
 
-type Line = { text: string; x: number; y: number; height: number };
+type Line = { text: string; x: number; y: number; height: number; position: number };
 
 function isTextItem(item: unknown): item is PdfTextItem {
   return typeof item === "object" && item !== null && "str" in item && typeof item.str === "string";
@@ -41,7 +41,7 @@ function joinLines(left: string, right: string) {
   return `${left} ${right}`;
 }
 
-export function extractReadingBlocks(items: unknown[]): ReadingBlock[] {
+export function extractReadingBlocks(items: unknown[], view: number[]): ReadingBlock[] {
   const lines: Line[] = [];
   let parts: string[] = [];
   let x = 0;
@@ -51,7 +51,7 @@ export function extractReadingBlocks(items: unknown[]): ReadingBlock[] {
 
   const flush = () => {
     const text = cleanLine(parts.join(""));
-    if (text && !isStructuralNoise(text)) lines.push({ text, x, y, height });
+    if (text && !isStructuralNoise(text)) lines.push({ text, x, y, height, position: Math.min(1, Math.max(0, (view[3] - y) / (view[3] - view[1]))) });
     parts = [];
   };
 
@@ -80,29 +80,33 @@ export function extractReadingBlocks(items: unknown[]): ReadingBlock[] {
 
   const blocks: ReadingBlock[] = [];
   let paragraph = "";
+  let paragraphPosition = 0;
   let previous: Line | null = null;
   const gaps = lines.slice(1).map((line, index) => Math.abs(line.y - lines[index].y)).filter(gap => gap > 1 && gap < 80).sort((a, b) => a - b);
   const typicalGap = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 0;
   const flushParagraph = () => {
-    if (paragraph) blocks.push({ text: paragraph, kind: "paragraph" });
+    if (paragraph) blocks.push({ text: paragraph, kind: "paragraph", position: paragraphPosition });
     paragraph = "";
   };
 
   for (const line of lines) {
     if (isHeading(line.text)) {
       flushParagraph();
-      blocks.push({ text: line.text, kind: "heading" });
+      blocks.push({ text: line.text, kind: "heading", position: line.position });
       previous = null;
       continue;
     }
     const gap = previous ? Math.abs(line.y - previous.y) : 0;
+    // Large vertical gaps commonly mark an illustration between these text blocks.
     const newParagraph = previous && (
       (typicalGap > 0 && gap > Math.max(typicalGap * 1.45, previous.height * 1.55))
+      || gap > Math.max(72, previous.height * 4)
       || line.x - previous.x > Math.max(12, previous.height * 0.9)
       || /^[—–]/.test(line.text)
       || (/[.!?…]["”']?$/u.test(previous.text) && previous.text.length < 55 && /^[\p{Lu}“"‘]/u.test(line.text))
     );
     if (newParagraph) flushParagraph();
+    if (!paragraph) paragraphPosition = line.position;
     paragraph = paragraph ? joinLines(paragraph, line.text) : line.text;
     previous = line;
   }

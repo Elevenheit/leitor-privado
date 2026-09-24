@@ -1,6 +1,6 @@
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 
-export type ReaderIllustration = { src: string; page: number; width: number; height: number };
+export type ReaderIllustration = { src: string; page: number; width: number; height: number; position: number; wide: boolean };
 
 type Matrix = [number, number, number, number, number, number];
 type Bounds = { left: number; right: number; bottom: number; top: number };
@@ -28,6 +28,19 @@ function imageBounds(matrix: Matrix): Bounds {
   return {
     left: Math.min(...points.map(point => point[0])), right: Math.max(...points.map(point => point[0])),
     bottom: Math.min(...points.map(point => point[1])), top: Math.max(...points.map(point => point[1])),
+  };
+}
+
+function illustrationPlacement(bounds: Bounds, view: number[]) {
+  const pageWidth = view[2] - view[0];
+  const pageHeight = view[3] - view[1];
+  const width = Math.max(0, Math.min(bounds.right, view[2]) - Math.max(bounds.left, view[0]));
+  const height = Math.max(0, Math.min(bounds.top, view[3]) - Math.max(bounds.bottom, view[1]));
+  const coverage = width * height / (pageWidth * pageHeight);
+  const centerY = (Math.max(bounds.bottom, view[1]) + Math.min(bounds.top, view[3])) / 2;
+  return {
+    position: Math.min(1, Math.max(0, (view[3] - centerY) / pageHeight)),
+    wide: coverage >= 0.22 || width / pageWidth >= 0.72,
   };
 }
 
@@ -220,7 +233,7 @@ export function createReaderIllustrationExtractor(pdf: PDFDocumentProxy) {
         if (!blob || disposed) { fingerprints.delete(signature); continue; }
         const src = URL.createObjectURL(blob);
         urls.add(src);
-        illustrations.push({ src, page: pageNumber, width: source.width, height: source.height });
+        illustrations.push({ src, page: pageNumber, width: source.width, height: source.height, ...illustrationPlacement(candidate.bounds, page.view) });
       }
       return illustrations;
     } catch { return []; }
