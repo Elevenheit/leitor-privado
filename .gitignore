@@ -2,3 +2,9 @@ node_modules/
 .next/
 .env
 .env.local
+*.tsbuildinfo
+.env.*
+!.env.example
+backups/
+test-results/
+playwright-report/
