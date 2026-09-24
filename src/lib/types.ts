@@ -1,4 +1,7 @@
 export type Book = {
+  media_type?: "pdf" | "cbz" | "video";
+  skip_intro?: boolean;
+  intro_end?: number;
   id: string;
   owner_id: string;
   title: string;
@@ -16,6 +19,7 @@ export type Book = {
 };
 
 export type Series = {
+  format?: "novel" | "manga" | "manhwa" | "anime";
   id: string;
   owner_id: string;
   title: string;
