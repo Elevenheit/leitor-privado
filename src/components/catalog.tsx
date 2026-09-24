@@ -1,13 +1,14 @@
-﻿/* eslint-disable @next/next/no-img-element -- Private signed and blob URLs must stay in the browser, avoiding an image proxy. */
+/* eslint-disable @next/next/no-img-element -- Private signed and blob URLs must stay in the browser, avoiding an image proxy. */
 "use client";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { ArrowUpRight, BookOpen, Clapperboard, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import { formats, mediaHref, type Format } from "@/lib/catalog";
-import type { Series, Book } from "@/lib/types";
+import { formats, type Format } from "@/lib/catalog";
+import type { Series } from "@/lib/types";
 import { Nav } from "./nav";
+import { RecentHistory } from "./recent-history";
 export function Catalog({
   user,
   format,
@@ -20,7 +21,6 @@ export function Catalog({
   const [items, setItems] = useState<Series[]>([]);
   const [covers, setCovers] = useState<Record<string, string>>({});
   const [favs, setFavs] = useState<string[]>([]);
-  const [recent, setRecent] = useState<Book[]>([]);
   const [q, setQ] = useState("");
   const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -67,25 +67,6 @@ export function Catalog({
             }),
         );
         if (live) setCovers(Object.fromEntries(c));
-        if (!format && !list) {
-          const p = await api
-            .from("reading_progress")
-            .select("book_id")
-            .eq("owner_id", user.id)
-            .eq("completed", false)
-            .order("updated_at", { ascending: false })
-            .limit(6);
-          if (p.error) throw p.error;
-          const b = await api
-            .from("books")
-            .select("id,title,media_type")
-            .in(
-              "id",
-              (p.data || []).map((x) => x.book_id),
-            );
-          if (b.error) throw b.error;
-          if (live) setRecent((b.data || []) as Book[]);
-        }
       } catch {
         if (live)
           setError(
@@ -119,77 +100,41 @@ export function Catalog({
     <>
       <Nav />
       <main className="dashboard beta-dashboard">
-        <section className="catalog-heading">
-          <h1>
-            {format ? formats[format] : list ? "Minha lista" : "Biblioteca"}
-          </h1>
-          <label className="search catalog-search">
-            <Search size={17} aria-hidden="true" />
-            <input
-              aria-label={
-                format
-                  ? `Buscar em ${formats[format]}`
-                  : "Busca global de obras"
-              }
-              placeholder={
-                format ? `Buscar em ${formats[format]}...` : "Buscar no Nook"
-              }
-              value={q}
-              onChange={(e) => {
-                setQ(e.target.value);
-                setPage(0);
-              }}
-            />
-          </label>
-        </section>
-        <nav className="category-tabs" aria-label="Categorias da biblioteca">
-          <Link href="/" aria-current={!format && !list ? "page" : undefined}>
-            Todos
-          </Link>
-          {Object.entries(formats).map(([id, label]) => (
-            <Link
-              href={`/category/${id}`}
-              key={id}
-              aria-current={format === id ? "page" : undefined}
-            >
-              {label}
-            </Link>
-          ))}
-        </nav>
-        {!format && !list && recent.length > 0 && (
-          <section className="library-section continue-section">
-            <h2>Continuar lendo ou assistindo</h2>
-            <div className="continue-grid">
-              {recent.map((b) => (
-                <Link className="continue-card" href={mediaHref(b)} key={b.id}>
-                  <span className="continue-icon" aria-hidden="true">
-                    {b.media_type === "video" ? (
-                      <Clapperboard size={21} />
-                    ) : (
-                      <BookOpen size={21} />
-                    )}
-                  </span>
-                  <span className="continue-copy">
-                    <small>RETOMAR SUA HISTÓRIA</small>
-                    <strong>{b.title}</strong>
-                  </span>
-                  <span className="continue-link">
-                    Continuar <ArrowUpRight size={16} />
-                  </span>
-                </Link>
-              ))}
-            </div>
-          </section>
+        {format || list ? (
+          <header className="catalog-heading">
+            <h1>{format ? formats[format] : "Minha lista"}</h1>
+          </header>
+        ) : (
+          <h1 className="sr-only">Início</h1>
         )}
+        {!list && <RecentHistory userId={user.id} format={format} />}
         <section className="library-section">
-          <div className="section-head">
+          <div className="section-head catalog-section-head">
             <h2>
               {format
-                ? "Recém adicionados"
+                ? "Todos os títulos"
                 : list
                   ? "Guardados por você"
-                  : "Explore o acervo"}
+                  : "Adicionados recentemente"}
             </h2>
+            <label className="search catalog-search">
+              <Search size={17} aria-hidden="true" />
+              <input
+                aria-label={
+                  format
+                    ? `Buscar em ${formats[format]}`
+                    : "Busca global de obras"
+                }
+                placeholder={
+                  format ? `Buscar em ${formats[format]}...` : "Buscar no Nook"
+                }
+                value={q}
+                onChange={(e) => {
+                  setQ(e.target.value);
+                  setPage(0);
+                }}
+              />
+            </label>
           </div>
           {error && (
             <p className="error" role="alert">
@@ -200,16 +145,14 @@ export function Catalog({
             </p>
           )}
           {loading ? (
-            <p className="empty-state" role="status">
+            <p className="catalog-loading" role="status">
               Organizando suas histórias…
             </p>
           ) : !items.length ? (
             <div className="empty-state catalog-empty">
               <h3>Nenhuma obra por aqui ainda.</h3>
               <p>
-                {q
-                  ? "Tente outro título."
-                  : "Novos títulos aparecerão aqui."}
+                {q ? "Tente outro título." : "Novos títulos aparecerão aqui."}
               </p>
             </div>
           ) : (
