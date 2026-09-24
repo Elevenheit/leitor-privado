@@ -89,7 +89,7 @@ export function Catalog({
       } catch {
         if (live)
           setError(
-            "NÃ£o foi possÃ­vel carregar a biblioteca. Confira a conexÃ£o e tente novamente.",
+            "Não foi possível carregar a biblioteca. Confira a conexão e tente novamente.",
           );
       } finally {
         if (live) setLoading(false);
@@ -112,7 +112,7 @@ export function Catalog({
       : await supabase()
           .from("favorites")
           .upsert({ owner_id: user.id, series_id: id });
-    if (r.error) setError("NÃ£o foi possÃ­vel salvar sua lista.");
+    if (r.error) setError("Não foi possível salvar sua lista.");
     else setFavs((old) => (had ? old.filter((x) => x !== id) : [...old, id]));
   }
   return (
@@ -170,7 +170,7 @@ export function Catalog({
                     )}
                   </span>
                   <span className="continue-copy">
-                    <small>RETOMAR SUA HISTÃ“RIA</small>
+                    <small>RETOMAR SUA HISTÓRIA</small>
                     <strong>{b.title}</strong>
                   </span>
                   <span className="continue-link">
@@ -185,9 +185,9 @@ export function Catalog({
           <div className="section-head">
             <h2>
               {format
-                ? "RecÃ©m adicionados"
+                ? "Recém adicionados"
                 : list
-                  ? "Guardados por vocÃª"
+                  ? "Guardados por você"
                   : "Explore o acervo"}
             </h2>
           </div>
@@ -201,15 +201,15 @@ export function Catalog({
           )}
           {loading ? (
             <p className="empty-state" role="status">
-              Organizando suas histÃ³riasâ€¦
+              Organizando suas histórias…
             </p>
           ) : !items.length ? (
             <div className="empty-state catalog-empty">
               <h3>Nenhuma obra por aqui ainda.</h3>
               <p>
                 {q
-                  ? "Tente outro tÃ­tulo."
-                  : "Novos tÃ­tulos aparecerÃ£o aqui."}
+                  ? "Tente outro título."
+                  : "Novos títulos aparecerão aqui."}
               </p>
             </div>
           ) : (
