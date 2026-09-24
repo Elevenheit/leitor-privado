@@ -7,6 +7,34 @@ export type Book = {
   size_bytes: number;
   total_pages: number | null;
   created_at: string;
+  series_id: string | null;
+  volume_id: string | null;
+  chapter_number: number | null;
+  chapter_title: string | null;
+  sort_order: number;
+  content_type: "chapter" | "volume";
+};
+
+export type Series = {
+  id: string;
+  owner_id: string;
+  title: string;
+  description: string | null;
+  cover_path: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Volume = {
+  id: string;
+  owner_id: string;
+  series_id: string;
+  volume_number: number | null;
+  title: string | null;
+  description: string | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
 };
 
 export type ReadingProgress = {
