@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight, Minus, Plus, Type } from "lucide-react";
+import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight, Minus, Plus, Settings2, Type } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 import type { User } from "@supabase/supabase-js";
 import { AuthGate } from "@/components/auth-gate";
 import { Nav } from "@/components/nav";
 import { BUCKET, supabase } from "@/lib/supabase";
+import { extractReadingBlocks, type ReadingBlock } from "@/lib/reader-text";
 import type { Book, ReadingProgress, Series, Volume } from "@/lib/types";
 
 type Mode = "text" | "page";
@@ -29,10 +30,11 @@ function Reader({ user, id }: { user: User; id: string }) {
   const [pages, setPages] = useState(0);
   const [mode, setMode] = useState<Mode>("text");
   const [theme, setTheme] = useState<Theme>("dark");
-  const [fontSize, setFontSize] = useState(20);
+  const [fontSize, setFontSize] = useState(22);
   const [lineHeight, setLineHeight] = useState(1.85);
-  const [textWidth, setTextWidth] = useState(720);
-  const [textByPage, setTextByPage] = useState<Record<number, string[]>>({});
+  const [textWidth, setTextWidth] = useState(760);
+  const [textByPage, setTextByPage] = useState<Record<number, ReadingBlock[]>>({});
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [activePages, setActivePages] = useState<Set<number>>(new Set([1, 2, 3]));
   const [loadingPages, setLoadingPages] = useState<Set<number>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
@@ -107,7 +109,7 @@ function Reader({ user, id }: { user: User; id: string }) {
           setPreviousId(index > 0 ? bookList[index - 1].id : null); setNextId(index >= 0 && index < bookList.length - 1 ? bookList[index + 1].id : null);
         }
         if (current.total_pages !== loaded.numPages) void api.from("books").update({ total_pages: loaded.numPages }).eq("id", id);
-        try { const prefs = localStorage.getItem("nook-reader-prefs"); if (prefs) { const value = JSON.parse(prefs) as { fontSize?: number; lineHeight?: number; textWidth?: number; theme?: Theme }; if (value.fontSize) setFontSize(value.fontSize); if (value.lineHeight) setLineHeight(value.lineHeight); if (value.textWidth) setTextWidth(value.textWidth); if (value.theme) setTheme(value.theme); } } catch { /* Preferences are optional. */ }
+        try { const prefs = localStorage.getItem("nook-reader-prefs"); if (prefs) { const value = JSON.parse(prefs) as { fontSize?: number; lineHeight?: number; textWidth?: number; theme?: Theme }; if (value.fontSize) setFontSize(value.fontSize); if (value.lineHeight) setLineHeight(value.lineHeight); if (value.textWidth) setTextWidth(value.textWidth <= 730 ? 700 : value.textWidth <= 790 ? 760 : 820); if (value.theme) setTheme(value.theme); } } catch { /* Preferences are optional. */ }
         readyRef.current = true; setLoading(false);
       } catch (cause) { if (!cancelled) { setError(cause instanceof Error ? cause.message : "Falha ao abrir PDF."); setLoading(false); } }
     }
@@ -133,12 +135,13 @@ function Reader({ user, id }: { user: User; id: string }) {
   }, [pages, loading]);
 
   const loadPageText = useCallback(async (pageNo: number) => {
-    if (!pdf || loadingRef.current.has(pageNo) || textByPage[pageNo]) return;
+    if (!pdf || loadingRef.current.has(pageNo) || textByPage[pageNo] !== undefined) return;
     loadingRef.current.add(pageNo); setLoadingPages(previous => new Set(previous).add(pageNo));
     try {
-      const pdfPage = await pdf.getPage(pageNo); const content = await pdfPage.getTextContent(); const lines: string[] = []; let line = "";
-      for (const item of content.items) { if (!("str" in item)) continue; const fragment = item.str.trim(); if (fragment) line += (line && !/\s$/.test(line) ? " " : "") + fragment; if (item.hasEOL) { if (line.trim()) lines.push(line.trim()); line = ""; } }
-      if (line.trim()) lines.push(line.trim()); setTextByPage(previous => ({ ...previous, [pageNo]: lines }));
+      const pdfPage = await pdf.getPage(pageNo);
+      const content = await pdfPage.getTextContent();
+      const blocks = extractReadingBlocks(content.items);
+      setTextByPage(previous => ({ ...previous, [pageNo]: blocks }));
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Falha ao extrair texto."); }
     finally { loadingRef.current.delete(pageNo); setLoadingPages(previous => { const next = new Set(previous); next.delete(pageNo); return next; }); }
   }, [pdf, textByPage]);
@@ -181,21 +184,22 @@ function Reader({ user, id }: { user: User; id: string }) {
     if (change.fontSize) setFontSize(change.fontSize); if (change.lineHeight) setLineHeight(change.lineHeight); if (change.textWidth) setTextWidth(change.textWidth); if (change.theme) setTheme(change.theme);
     localStorage.setItem("nook-reader-prefs", JSON.stringify(next));
   }
-  function setView(next: Mode) { modeRef.current = next; setMode(next); void save(); }
+  function setView(next: Mode) { modeRef.current = next; setMode(next); setSettingsOpen(false); void save(); }
 
   if (loading) return <><Nav back/><main className="reader-status">Abrindo sua leitura…</main></>;
   if (error && !book) return <><Nav back/><main className="reader-status"><BookOpen size={34}/><h1>Não foi possível abrir</h1><p>{error}</p><Link href="/" className="primary-button">Voltar à biblioteca</Link></main></>;
 
   const pageCaption = book?.content_type === "volume" ? `Volume completo${book.chapter_number ? ` ${book.chapter_number}` : ""}${book.chapter_title ? ` · ${book.chapter_title}` : ""}` : book?.chapter_number ? `Capítulo ${book.chapter_number}${book.chapter_title ? ` · ${book.chapter_title}` : ""}` : book?.chapter_title || book?.title;
-  return <div className={`reader-app reader-theme-${theme}`}><Nav back/><header className="reader-topbar"><button className="reader-back" onClick={() => router.push(series ? `/series/${series.id}` : "/")}><ArrowLeft size={18}/><span>Biblioteca</span></button><div className="reader-heading"><strong>{series?.title || book?.title}</strong><span>{volume ? (volume.volume_number ? `Volume ${volume.volume_number}` : volume.title) : ""}{volume ? " · " : ""}{pageCaption}</span></div><span className="save-state">{saveState}</span></header>
-    <div className="reader-toolbar"><div className="mode-toggle"><button className={mode === "text" ? "selected" : ""} onClick={() => setView("text")}><Type size={16}/> Texto contínuo</button><button className={mode === "page" ? "selected" : ""} onClick={() => setView("page")}><BookOpen size={16}/> PDF contínuo</button></div><div className="reader-controls"><div className="font-tools"><button aria-label="Diminuir fonte" onClick={() => updatePrefs({ fontSize: Math.max(15, fontSize - 1) })}><Minus size={15}/></button><span>Aa</span><button aria-label="Aumentar fonte" onClick={() => updatePrefs({ fontSize: Math.min(30, fontSize + 1) })}><Plus size={15}/></button></div><label className="reader-select">Linha<select aria-label="Altura da linha" value={lineHeight} onChange={e => updatePrefs({ lineHeight: Number(e.target.value) })}><option value={1.65}>Compacta</option><option value={1.85}>Confortável</option><option value={2.05}>Ampla</option></select></label><label className="reader-select">Largura<select aria-label="Largura do texto" value={textWidth} onChange={e => updatePrefs({ textWidth: Number(e.target.value) })}><option value={620}>Estreita</option><option value={720}>Padrão</option><option value={780}>Ampla</option></select></label><label className="reader-select">Tema<select aria-label="Tema do leitor" value={theme} onChange={e => updatePrefs({ theme: e.target.value as Theme })}><option value="dark">Escuro</option><option value="sepia">Sépia</option><option value="light">Claro</option></select></label></div></div>
+  return <div className={`reader-app reader-theme-${theme}`}><header className="reader-topbar"><button className="reader-back" aria-label="Voltar à biblioteca" onClick={() => router.push(series ? `/series/${series.id}` : "/")}><ArrowLeft size={18}/><span>Biblioteca</span></button><div className="reader-heading"><strong>{series?.title || book?.title}</strong><span>{volume ? (volume.volume_number ? `Volume ${volume.volume_number}` : volume.title) : ""}{volume ? " · " : ""}{pageCaption}</span></div><span className="save-state" aria-live="polite">{saveState}</span></header>
+    <div className="reader-toolbar"><div className="mode-toggle" role="group" aria-label="Modo de leitura"><button className={mode === "text" ? "selected" : ""} aria-pressed={mode === "text"} title="Leitura limpa, apenas texto" onClick={() => setView("text")}><Type size={15}/> Texto</button><button className={mode === "page" ? "selected" : ""} aria-pressed={mode === "page"} title="Visualização fiel às páginas do PDF" onClick={() => setView("page")}><BookOpen size={15}/> PDF</button></div><div className="reader-toolbar-end"><span className="reader-page-count">p. {currentPage} / {pages}</span><button className={`reader-settings-button ${settingsOpen ? "active" : ""}`} aria-label="Ajustes de leitura" aria-expanded={settingsOpen} aria-controls="reader-settings" onClick={() => setSettingsOpen(value => !value)}><Settings2 size={17}/><span>Ajustes</span></button></div>
+      {settingsOpen && <div className="reader-settings" id="reader-settings"><div className="reader-settings-title">Ajustes de leitura</div><div className="reader-controls"><div className="font-tools"><span>Fonte</span><div><button aria-label="Diminuir fonte" onClick={() => updatePrefs({ fontSize: Math.max(15, fontSize - 1) })}><Minus size={15}/></button><span>{fontSize}px</span><button aria-label="Aumentar fonte" onClick={() => updatePrefs({ fontSize: Math.min(30, fontSize + 1) })}><Plus size={15}/></button></div></div><label className="reader-select">Linha<select aria-label="Altura da linha" value={lineHeight} onChange={e => updatePrefs({ lineHeight: Number(e.target.value) })}><option value={1.65}>Compacta</option><option value={1.85}>Confortável</option><option value={2.05}>Ampla</option></select></label><label className="reader-select">Largura<select aria-label="Largura do texto" value={textWidth} onChange={e => updatePrefs({ textWidth: Number(e.target.value) })}><option value={700}>Estreita</option><option value={760}>Padrão</option><option value={820}>Ampla</option></select></label><label className="reader-select">Tema<select aria-label="Tema do leitor" value={theme} onChange={e => updatePrefs({ theme: e.target.value as Theme })}><option value="dark">Escuro</option><option value="sepia">Sépia</option><option value="light">Claro</option></select></label></div></div>}</div>
     <div className="reader-scroll" ref={scrollRef} onScroll={onScroll}><div className={`continuous-document ${mode === "text" ? "text-document" : "pdf-document"}`} style={{ "--reader-font-size": `${fontSize}px`, "--reader-line-height": lineHeight, "--reader-width": `${textWidth}px` } as React.CSSProperties}>
       {orderedPages.map(pageNo => <section className={`document-segment ${mode === "text" ? "text-segment" : "pdf-segment"}`} key={pageNo} data-page-segment={pageNo}>
-        {mode === "text" ? textByPage[pageNo] ? textByPage[pageNo].length ? <article className="reflow-text">{textByPage[pageNo].map((line, index) => <p data-line={index} key={index}>{line}</p>)}</article> : <LazyPdfPage pdf={pdf!} page={pageNo} active={activePages.has(pageNo)}/> : <div className="text-placeholder">{loadingPages.has(pageNo) ? "Preparando leitura…" : ""}</div> : <LazyPdfPage pdf={pdf!} page={pageNo} active={activePages.has(pageNo)}/>}
+        {mode === "text" ? textByPage[pageNo] !== undefined ? textByPage[pageNo].length ? <article className="reflow-text">{textByPage[pageNo].map((block, index) => block.kind === "heading" ? <h2 data-line={index} key={index}>{block.text}</h2> : <p data-line={index} key={index}>{block.text}</p>)}</article> : <div className="text-only-note">Página {pageNo} sem texto extraível. <button onClick={() => setView("page")}>Ver no PDF</button></div> : <div className="text-placeholder">{loadingPages.has(pageNo) ? "Preparando leitura…" : ""}</div> : <LazyPdfPage pdf={pdf!} page={pageNo} active={activePages.has(pageNo)}/>}
       </section>)}
       {error && <div className="error">{error}</div>}
       <div className="chapter-navigation">{previousId ? <Link href={`/read/${previousId}`}><ChevronLeft size={17}/> Capítulo anterior</Link> : <span/>}{nextId ? <Link href={`/read/${nextId}`}>Próximo capítulo <ChevronRight size={17}/></Link> : <span/>}</div>
-    </div></div><footer className="reader-footer reader-progress-footer"><span>{series?.title || book?.title}</span><span>{volume?.volume_number ? `Volume ${volume.volume_number} · ` : ""}p. {currentPage} / {pages}</span></footer>
+    </div></div>
   </div>;
 }
 
