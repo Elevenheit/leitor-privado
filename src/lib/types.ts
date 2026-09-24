@@ -23,6 +23,7 @@ export type Series = {
   cover_path: string | null;
   created_at: string;
   updated_at: string;
+  is_favorite?: boolean;
 };
 
 export type Volume = {
@@ -45,6 +46,17 @@ export type ReadingProgress = {
   scroll_ratio: number;
   reading_mode: "text" | "page";
   updated_at: string;
+};
+
+export type ReadingBookmark = {
+  id: string;
+  owner_id: string;
+  book_id: string;
+  page_number: number;
+  line_index: number;
+  scroll_ratio: number;
+  label: string | null;
+  created_at: string;
 };
 
 export function formatSize(bytes: number) {
