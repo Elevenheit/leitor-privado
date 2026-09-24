@@ -14,18 +14,50 @@ export function BetaAccess({
   const [intro, setIntro] = useState(false);
   useEffect(() => {
     let live = true;
-    supabase()
-      .rpc(admin ? "beta_admin" : "beta_member")
-      .then(({ data, error }) => {
+    async function checkAccess() {
+      try {
+        const api = supabase();
+        const { data: sessionData, error: sessionError } =
+          await api.auth.getSession();
+        if (sessionError) throw sessionError;
+        const userId = sessionData.session?.user.id;
+        if (!userId) {
+          if (live) setStatus("denied");
+          return;
+        }
+
+        const { data: access, error: accessError } = await api
+          .from("beta_access")
+          .select("role, expires_at, revoked")
+          .eq("user_id", userId)
+          .maybeSingle();
+        if (accessError) throw accessError;
+
+        const expiresAt = access?.expires_at;
+        const hasNoExpiry = expiresAt === "infinity";
+        const expiryTime = expiresAt ? Date.parse(expiresAt) : Number.NaN;
+        const validExpiry =
+          hasNoExpiry || (Number.isFinite(expiryTime) && expiryTime > Date.now());
+        const allowed =
+          access?.revoked === false &&
+          validExpiry &&
+          (!admin || access.role === "admin");
+
         if (live) {
-          setStatus(error ? "error" : data ? "ok" : "denied");
-          try {
-            setIntro(!localStorage.getItem("nook-intro-v1"));
-          } catch {
-            setIntro(false);
+          setStatus(allowed ? "ok" : "denied");
+          if (allowed) {
+            try {
+              setIntro(!localStorage.getItem("nook-intro-v1"));
+            } catch {
+              setIntro(false);
+            }
           }
         }
-      });
+      } catch {
+        if (live) setStatus("error");
+      }
+    }
+    void checkAccess();
     return () => {
       live = false;
     };

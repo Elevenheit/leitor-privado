@@ -60,15 +60,6 @@ export function AuthGate({
     setSubmitting(true);
     setError("");
     try {
-      if (signup) {
-        const readiness = await supabase().rpc("beta_signup_ready");
-        if (readiness.error || !readiness.data) {
-          setError(
-            "O cadastro do beta ainda n?o foi configurado neste ambiente. Fale com o administrador.",
-          );
-          return;
-        }
-      }
       const credentials = { email: email.trim(), password };
       const { data, error } = signup
         ? await supabase().auth.signUp(credentials)
