@@ -317,3 +317,31 @@ a { color:inherit; text-decoration:none; }
   .toolbar .search { flex:1 1 100%; }
   .reader-app .reader-settings-button { min-width:30px; }
 }
+
+.batch-upload-modal { width:min(100%,880px); max-height:calc(100dvh - 34px); gap:12px; }
+.batch-upload-modal>p { margin:0 0 4px; color:#aaa3a0; font-size:12px; line-height:1.5; }
+.batch-picker { display:flex!important; align-items:center; gap:9px; width:max-content; padding:10px 13px; color:#e8d2b8!important; border:1px solid #51463a; border-radius:8px; cursor:pointer; }
+.batch-picker input { display:none; }
+.batch-summary { display:grid; gap:8px; color:#c8b39a; font-size:12px; }
+.batch-list { display:grid; gap:12px; overflow-y:auto; min-height:0; padding-right:5px; }
+.batch-item { padding:15px; border:1px solid #38343a; border-radius:9px; background:#19191e; }
+.batch-item header { display:flex; align-items:start; justify-content:space-between; gap:10px; margin-bottom:12px; }
+.batch-item header strong { min-width:0; overflow-wrap:anywhere; font-size:12px; font-weight:600; }
+.batch-status { display:flex; align-items:center; gap:4px; flex:none; color:#aaa3a0; font-size:10px; }
+.batch-status.status-done { color:#a8c4a2; }.batch-status.status-error,.batch-error { color:#e5a59e; }
+.batch-fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+.batch-fields label { min-width:0; font-size:10px; }
+.batch-fields input,.batch-fields select { padding:8px 9px; font-size:11px; }
+.batch-item .upload-track { margin-top:10px; }
+.batch-error { margin:8px 0 0; font-size:11px; }
+.batch-item-actions { display:flex; gap:12px; margin-top:8px; }
+.batch-item-actions button { display:flex; align-items:center; gap:5px; padding:5px 0; color:#cbaa86; border:0; background:transparent; font-size:11px; }
+.batch-actions { display:flex; justify-content:flex-end; gap:10px; padding-top:5px; }
+@media(max-width:620px) {
+  .library-buttons { flex-wrap:wrap; }
+  .library-buttons .secondary-button { font-size:11px; }
+  .batch-upload-modal { padding:23px 16px; }
+  .batch-fields { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .batch-item { padding:12px; }
+}
+@media(max-width:390px) { .batch-fields { grid-template-columns:1fr; } }
