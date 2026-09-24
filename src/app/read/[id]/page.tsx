@@ -55,6 +55,7 @@ function Reader({ user, id }: { user: User; id: string }) {
   const [focusMode, setFocusMode] = useState(false);
   const [focusControlsVisible, setFocusControlsVisible] = useState(false);
   const focusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const focusEnteredAt = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pageRef = useRef(1);
@@ -188,21 +189,37 @@ function Reader({ user, id }: { user: User; id: string }) {
     return () => { document.removeEventListener("visibilitychange", onVisibility); if (saveTimer.current) clearTimeout(saveTimer.current); void save(); };
   }, [save]);
 
+  const toggleFocusMode = useCallback(() => {
+    focusEnteredAt.current = focusMode ? 0 : performance.now();
+    if (focusTimer.current) clearTimeout(focusTimer.current);
+    focusTimer.current = null;
+    setFocusControlsVisible(false);
+    setFocusMode(!focusMode);
+  }, [focusMode]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
-      if (event.key === "Escape") { setFocusMode(false); setFocusControlsVisible(false); setIndexOpen(false); setBookmarksOpen(false); return; }
+      if (event.key === "Escape") {
+        focusEnteredAt.current = 0;
+        if (focusTimer.current) clearTimeout(focusTimer.current);
+        focusTimer.current = null;
+        setFocusMode(false); setFocusControlsVisible(false); setIndexOpen(false); setBookmarksOpen(false);
+        return;
+      }
       if (event.key.toLowerCase() === "f" && !indexOpen && !bookmarksOpen && !event.ctrlKey && !event.metaKey && !event.altKey) {
-        event.preventDefault(); setFocusMode(value => !value); setFocusControlsVisible(false);
+        event.preventDefault(); toggleFocusMode();
       }
     };
     document.addEventListener("keydown", onKeyDown);
-    return () => { document.removeEventListener("keydown", onKeyDown); if (focusTimer.current) clearTimeout(focusTimer.current); };
-  }, [indexOpen, bookmarksOpen]);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [indexOpen, bookmarksOpen, toggleFocusMode]);
+
+  useEffect(() => () => { if (focusTimer.current) clearTimeout(focusTimer.current); }, []);
 
   function revealFocusControls() {
-    if (!focusMode) return;
+    if (!focusMode || performance.now() - focusEnteredAt.current < 900) return;
     setFocusControlsVisible(true);
     if (focusTimer.current) clearTimeout(focusTimer.current);
     focusTimer.current = setTimeout(() => setFocusControlsVisible(false), 2800);
@@ -243,7 +260,7 @@ function Reader({ user, id }: { user: User; id: string }) {
 
   const pageCaption = book?.content_type === "volume" ? `Volume completo${book.chapter_number ? ` ${book.chapter_number}` : ""}${book.chapter_title ? ` · ${book.chapter_title}` : ""}` : book?.chapter_number ? `Capítulo ${book.chapter_number}${book.chapter_title ? ` · ${book.chapter_title}` : ""}` : book?.chapter_title || book?.title;
   return <div className={`reader-app reader-theme-${theme} ${focusMode ? "focus-mode" : ""} ${focusControlsVisible ? "focus-controls-visible" : ""}`} onMouseMove={revealFocusControls} onTouchStart={revealFocusControls}><header className="reader-topbar"><button className="reader-back" aria-label="Voltar à biblioteca" onClick={() => router.push(series ? `/series/${series.id}` : "/")}><ArrowLeft size={18}/><span>Biblioteca</span></button><div className="reader-heading"><strong>{series?.title || book?.title}</strong><span>{volume ? (volume.volume_number ? `Volume ${volume.volume_number}` : volume.title) : ""}{volume ? " · " : ""}{pageCaption}</span></div><span className="save-state" aria-live="polite">{saveState}</span></header>
-    <div className="reader-toolbar"><div className="mode-toggle" role="group" aria-label="Modo de leitura"><button className={mode === "text" ? "selected" : ""} aria-pressed={mode === "text"} title="Leitura limpa, apenas texto" onClick={() => setView("text")}><Type size={15}/> Texto</button><button className={mode === "page" ? "selected" : ""} aria-pressed={mode === "page"} title="Visualização fiel às páginas do PDF" onClick={() => setView("page")}><BookOpen size={15}/> PDF</button></div><div className="reader-quick-nav"><Link href={previousId ? `/read/${previousId}` : "#"} aria-disabled={!previousId} onClick={event => { if (!previousId) event.preventDefault(); }} aria-label="Capítulo anterior"><ChevronLeft size={18}/></Link><button onClick={() => setIndexOpen(true)}><List size={16}/><span>Índice</span></button><Link href={nextId ? `/read/${nextId}` : "#"} aria-disabled={!nextId} onClick={event => { if (!nextId) event.preventDefault(); }} aria-label="Próximo capítulo"><ChevronRight size={18}/></Link></div><div className="reader-toolbar-end"><span className="reader-page-count">p. {currentPage} / {pages}</span><button className="reader-settings-button" aria-label="Marcadores" title="Marcadores" onClick={() => setBookmarksOpen(true)}><Bookmark size={16}/></button><button className="reader-settings-button" aria-label={focusMode ? "Sair do modo foco" : "Ativar modo foco"} aria-pressed={focusMode} title="Modo foco (F)" onClick={() => { setFocusMode(value => !value); setFocusControlsVisible(false); }}><Maximize2 size={16}/></button><button className={`reader-settings-button ${settingsOpen ? "active" : ""}`} aria-label="Ajustes de leitura" aria-expanded={settingsOpen} aria-controls="reader-settings" onClick={() => setSettingsOpen(value => !value)}><Settings2 size={17}/><span>Ajustes</span></button></div>
+    <div className="reader-toolbar"><div className="mode-toggle" role="group" aria-label="Modo de leitura"><button className={mode === "text" ? "selected" : ""} aria-pressed={mode === "text"} title="Leitura limpa, apenas texto" onClick={() => setView("text")}><Type size={15}/> Texto</button><button className={mode === "page" ? "selected" : ""} aria-pressed={mode === "page"} title="Visualização fiel às páginas do PDF" onClick={() => setView("page")}><BookOpen size={15}/> PDF</button></div><div className="reader-quick-nav"><Link href={previousId ? `/read/${previousId}` : "#"} aria-disabled={!previousId} onClick={event => { if (!previousId) event.preventDefault(); }} aria-label="Capítulo anterior"><ChevronLeft size={18}/></Link><button onClick={() => setIndexOpen(true)}><List size={16}/><span>Índice</span></button><Link href={nextId ? `/read/${nextId}` : "#"} aria-disabled={!nextId} onClick={event => { if (!nextId) event.preventDefault(); }} aria-label="Próximo capítulo"><ChevronRight size={18}/></Link></div><div className="reader-toolbar-end"><span className="reader-page-count">p. {currentPage} / {pages}</span><button className="reader-settings-button" aria-label="Marcadores" title="Marcadores" onClick={() => setBookmarksOpen(true)}><Bookmark size={16}/></button><button className="reader-settings-button" aria-label={focusMode ? "Sair do modo foco" : "Ativar modo foco"} aria-pressed={focusMode} title="Modo foco (F)" onClick={toggleFocusMode}><Maximize2 size={16}/></button><button className={`reader-settings-button ${settingsOpen ? "active" : ""}`} aria-label="Ajustes de leitura" aria-expanded={settingsOpen} aria-controls="reader-settings" onClick={() => setSettingsOpen(value => !value)}><Settings2 size={17}/><span>Ajustes</span></button></div>
       {settingsOpen && <div className="reader-settings" id="reader-settings"><div className="reader-settings-title">Ajustes de leitura</div><div className="reader-controls"><div className="font-tools"><span>Fonte</span><div><button aria-label="Diminuir fonte" onClick={() => updatePrefs({ fontSize: Math.max(15, fontSize - 1) })}><Minus size={15}/></button><span>{fontSize}px</span><button aria-label="Aumentar fonte" onClick={() => updatePrefs({ fontSize: Math.min(30, fontSize + 1) })}><Plus size={15}/></button></div></div><label className="reader-select">Linha<select aria-label="Altura da linha" value={lineHeight} onChange={e => updatePrefs({ lineHeight: Number(e.target.value) })}><option value={1.65}>Compacta</option><option value={1.85}>Confortável</option><option value={2.05}>Ampla</option></select></label><label className="reader-select">Largura<select aria-label="Largura do texto" value={textWidth} onChange={e => updatePrefs({ textWidth: Number(e.target.value) })}><option value={700}>Estreita</option><option value={760}>Padrão</option><option value={820}>Ampla</option></select></label><label className="reader-select">Tema<select aria-label="Tema do leitor" value={theme} onChange={e => updatePrefs({ theme: e.target.value as Theme })}><option value="dark">Escuro</option><option value="sepia">Sépia</option><option value="light">Claro</option></select></label></div></div>}</div>
     <div className="reader-scroll" ref={scrollRef} onScroll={onScroll}><div className={`continuous-document ${mode === "text" ? "text-document" : "pdf-document"}`} style={{ "--reader-font-size": `${fontSize}px`, "--reader-line-height": lineHeight, "--reader-width": `${textWidth}px` } as React.CSSProperties}>
       {orderedPages.map(pageNo => <section className={`document-segment ${mode === "text" ? "text-segment" : "pdf-segment"}`} key={pageNo} data-page-segment={pageNo}>
