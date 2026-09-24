@@ -27,7 +27,7 @@ export function suggestDraft(file: File, series: Series[], volumes: Volume[]): B
     .replace(/^[\s.·–—:-]+|[\s.·–—:-]+$/g, "").trim();
   const matchedVolume = matchedSeries && volumeNumber ? volumes.find(item => item.series_id === matchedSeries.id && item.volume_number === Number(volumeNumber)) : null;
   return { id: crypto.randomUUID(), file, seriesId: matchedSeries?.id || "", volumeId: matchedVolume?.id || (matchedSeries && volumeNumber ? "new" : ""), volumeNumber, chapterNumber,
-    title: residual || (chapterNumber ? `Capítulo ${chapterNumber}` : base), contentType: "chapter", status: "waiting", percent: 0, error: "" };
+    title: residual || (chapterNumber ? `Capítulo ${chapterNumber}` : volumeNumber ? `Volume ${volumeNumber}` : base), contentType: volumeNumber && !chapterNumber ? "volume" : "chapter", status: "waiting", percent: 0, error: "" };
 }
 
 export async function uploadBatchPdf(file: File, path: string, onProgress: (percent: number) => void) {

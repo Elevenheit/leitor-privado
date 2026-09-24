@@ -86,7 +86,7 @@ export function LibraryManager({ user }: { user: User }) {
       }
       if (failures.length) setError(failures.join(" · ")); else setMessage(`Ordem ajustada para ${chosen.length} PDF(s).`);
     }
-    await load(); setSelected(new Set()); setBusy(false);
+    await load(); setSelected(new Set()); setPage(0); setBusy(false);
   }
 
   async function removeSelected() {
@@ -101,7 +101,7 @@ export function LibraryManager({ user }: { user: User }) {
     }
     if (failures.length) setError(failures.join(" · "));
     else setMessage(`${chosen.length} PDF(s) excluídos.`);
-    setDeleteOpen(false); setSelected(new Set()); await load(); setBusy(false);
+    setDeleteOpen(false); setSelected(new Set()); setPage(0); await load(); setBusy(false);
   }
 
   return <><Nav back/><main className="manager-page"><Link href="/" className="back-link"><ArrowLeft size={16}/> Biblioteca</Link><header className="manager-heading"><div><span className="eyebrow">Organização do acervo</span><h1>Gerenciar biblioteca</h1><p>Selecione PDFs para alterar a organização, tipo ou ordem.</p></div></header>

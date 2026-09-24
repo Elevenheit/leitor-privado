@@ -87,7 +87,7 @@ function Reader({ user, id }: { user: User; id: string }) {
         const api = supabase();
         const [bookResult, progressResult] = await Promise.all([
           api.from("books").select("*").eq("id", id).eq("owner_id", user.id).single(),
-          api.from("reading_progress").select("*").eq("book_id", id).maybeSingle(),
+          api.from("reading_progress").select("*").eq("owner_id", user.id),
         ]);
         if (bookResult.error || !bookResult.data) throw new Error("Capítulo não encontrado ou sem acesso.");
         const current = bookResult.data as Book;
@@ -102,23 +102,23 @@ function Reader({ user, id }: { user: User; id: string }) {
         task = pdfjs.getDocument({ data: new Uint8Array(await blobResult.data.arrayBuffer()) });
         const loaded = await task.promise;
         if (cancelled) return;
-        const saved = progressResult.data as ReadingProgress | null;
+        const allUserProgress = (progressResult.data || []) as ReadingProgress[];
+        const saved = allUserProgress.find(item => item.book_id === id);
         const start = Math.min(loaded.numPages, Math.max(1, saved?.page_number || 1));
         setBook(current); setSeries(workResult.data as Series | null); setVolume(volumeResult.data as Volume | null); setPdf(loaded); setPages(loaded.numPages); setCurrentPage(start); pageRef.current = start;
         restoringRef.current = saved ? { page: start, line: saved.line_index || 0, ratio: saved.scroll_ratio || 0 } : null;
         setMode(saved?.reading_mode || "text"); modeRef.current = saved?.reading_mode || "text";
         setActivePages(new Set([Math.max(1, start - 1), start, Math.min(loaded.numPages, start + 1)]));
-        const [allBooks, allVolumes, allProgress] = await Promise.all([
+        const [allBooks, allVolumes] = await Promise.all([
           current.series_id ? api.from("books").select("*").eq("owner_id", user.id).eq("series_id", current.series_id) : api.from("books").select("*").eq("owner_id", user.id).is("series_id", null),
           current.series_id ? api.from("volumes").select("*").eq("owner_id", user.id).eq("series_id", current.series_id) : Promise.resolve({ data: [] as Volume[], error: null }),
-          api.from("reading_progress").select("*").eq("owner_id", user.id),
         ]);
         if (!cancelled && allBooks.data) {
           const volumeList = (allVolumes.data || []) as Volume[];
           const bookList = sortBooks(allBooks.data as Book[], volumeList);
           setLibraryBooks(bookList); setLibraryVolumes(volumeList);
           const bookIds = new Set(bookList.map(item => item.id));
-          setLibraryProgress(Object.fromEntries(((allProgress.data || []) as ReadingProgress[]).filter(item => bookIds.has(item.book_id)).map(item => [item.book_id, item])));
+          setLibraryProgress(Object.fromEntries(allUserProgress.filter(item => bookIds.has(item.book_id)).map(item => [item.book_id, item])));
           const index = bookList.findIndex(item => item.id === id);
           setPreviousId(index > 0 ? bookList[index - 1].id : null); setNextId(index >= 0 && index < bookList.length - 1 ? bookList[index + 1].id : null);
         }
@@ -193,13 +193,13 @@ function Reader({ user, id }: { user: User; id: string }) {
       const target = event.target as HTMLElement | null;
       if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
       if (event.key === "Escape") { setFocusMode(false); setFocusControlsVisible(false); setIndexOpen(false); setBookmarksOpen(false); return; }
-      if (event.key.toLowerCase() === "f" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      if (event.key.toLowerCase() === "f" && !indexOpen && !bookmarksOpen && !event.ctrlKey && !event.metaKey && !event.altKey) {
         event.preventDefault(); setFocusMode(value => !value); setFocusControlsVisible(false);
       }
     };
     document.addEventListener("keydown", onKeyDown);
     return () => { document.removeEventListener("keydown", onKeyDown); if (focusTimer.current) clearTimeout(focusTimer.current); };
-  }, []);
+  }, [indexOpen, bookmarksOpen]);
 
   function revealFocusControls() {
     if (!focusMode) return;
@@ -231,8 +231,9 @@ function Reader({ user, id }: { user: User; id: string }) {
   }
 
   function jumpToBookmark(bookmark: ReadingBookmark) {
-    restoringRef.current = { page: bookmark.page_number, line: bookmark.line_index, ratio: bookmark.scroll_ratio };
-    setActivePages(new Set([Math.max(1, bookmark.page_number - 1), bookmark.page_number, Math.min(pages, bookmark.page_number + 1)]));
+    const targetPage = Math.max(1, Math.min(pages, bookmark.page_number));
+    restoringRef.current = { page: targetPage, line: bookmark.line_index, ratio: bookmark.scroll_ratio };
+    setActivePages(new Set([Math.max(1, targetPage - 1), targetPage, Math.min(pages, targetPage + 1)]));
     setBookmarksOpen(false);
     setRestoreTick(value => value + 1);
   }
