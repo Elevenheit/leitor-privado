@@ -10,7 +10,7 @@ alter table public.beta_access enable row level security;
 -- Preserve the existing catalog owner, without trusting user metadata.
 insert into public.beta_access(user_id,role,expires_at)
 select id,'admin','infinity'::timestamptz from auth.users
-where id = '0b42c97b-0c71-48d8-9410-3d0b78fc5bb2'::uuid;
+where id = '43caebf0-0851-4939-978d-196aa05e80f2'::uuid;
 create function public.beta_member() returns boolean language sql stable security definer set search_path = '' as $$
  select exists(select 1 from public.beta_access where user_id=auth.uid() and not revoked and expires_at>now()); $$;
 create function public.beta_admin() returns boolean language sql stable security definer set search_path = '' as $$
