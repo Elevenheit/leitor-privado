@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { ArrowLeft, BookOpen, Check, ChevronRight, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, BookOpen, Check, ChevronRight, Pencil, Plus, Trash2, X } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { AuthGate } from "@/components/auth-gate";
+import { ConfirmDialog } from "@/components/modals/confirm-dialog";
 import { Nav } from "@/components/nav";
 import { supabase } from "@/lib/supabase";
 import type { Book, ReadingProgress, Series, Volume } from "@/lib/types";
@@ -26,6 +27,11 @@ function SeriesDetail({ user, id }: { user: User; id: string }) {
   const [error, setError] = useState("");
   const [volumeTitle, setVolumeTitle] = useState("");
   const [volumeNumber, setVolumeNumber] = useState("");
+  const [editingVolume, setEditingVolume] = useState<Volume | null>(null);
+  const [editVolumeNumber, setEditVolumeNumber] = useState("");
+  const [editVolumeTitle, setEditVolumeTitle] = useState("");
+  const [deleteVolumeTarget, setDeleteVolumeTarget] = useState<Volume | null>(null);
+  const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<Book | null>(null);
   const [chapterName, setChapterName] = useState("");
   const [chapterNumber, setChapterNumber] = useState("");
@@ -62,17 +68,23 @@ function SeriesDetail({ user, id }: { user: User; id: string }) {
     const { error: saveError } = await supabase().from("volumes").insert({ owner_id: user.id, series_id: id, volume_number: number, title: volumeTitle.trim() || null, sort_order: number ? Math.round(number * 1000) : volumes.length * 1000 });
     if (saveError) setError(saveError.message); else { setVolumeNumber(""); setVolumeTitle(""); await load(); }
   }
-  async function editVolume(volume: Volume) {
-    const num = window.prompt("Número/ordem do volume", volume.volume_number?.toString() || ""); if (num === null) return;
-    const title = window.prompt("Título opcional", volume.title || ""); if (title === null) return;
-    const number = num.trim() ? Number(num) : null;
-    const { error: updateError } = await supabase().from("volumes").update({ volume_number: number, title: title.trim() || null, sort_order: number ? Math.round(number * 1000) : volume.sort_order, updated_at: new Date().toISOString() }).eq("id", volume.id).eq("owner_id", user.id);
-    if (updateError) setError(updateError.message); await load();
+  function editVolume(volume: Volume) {
+    setEditingVolume(volume); setEditVolumeNumber(volume.volume_number?.toString() || ""); setEditVolumeTitle(volume.title || "");
   }
-  async function deleteVolume(volume: Volume) {
-    if (!window.confirm(`Excluir a organização “${volume.title || `Volume ${volume.volume_number || ""}`}”? Os PDFs e o progresso serão preservados em “Sem volume”.`)) return;
+  async function saveVolumeEdit() {
+    if (!editingVolume) return;
+    const number = editVolumeNumber.trim() ? Number(editVolumeNumber) : null;
+    setBusy(true);
+    const { error: updateError } = await supabase().from("volumes").update({ volume_number: number, title: editVolumeTitle.trim() || null, sort_order: number ? Math.round(number * 1000) : editingVolume.sort_order, updated_at: new Date().toISOString() }).eq("id", editingVolume.id).eq("owner_id", user.id);
+    if (updateError) setError(updateError.message); else setEditingVolume(null);
+    await load(); setBusy(false);
+  }
+  function deleteVolume(volume: Volume) { setDeleteVolumeTarget(volume); }
+  async function removeVolume(volume: Volume) {
+    setBusy(true);
     const { error: deleteError } = await supabase().from("volumes").delete().eq("id", volume.id).eq("owner_id", user.id);
-    if (deleteError) setError(deleteError.message); await load();
+    if (deleteError) setError(deleteError.message); else setDeleteVolumeTarget(null);
+    await load(); setBusy(false);
   }
   function openEdit(book: Book) {
     setEditing(book); setChapterName(book.chapter_title || book.title); setChapterNumber(book.chapter_number?.toString() || ""); setChapterSeries(book.series_id || id); setChapterVolume(book.volume_id || "");
@@ -113,7 +125,9 @@ function SeriesDetail({ user, id }: { user: User; id: string }) {
       {wholeChapters.length > 0 && <section className="volume-section"><header className="volume-heading"><div><span className="eyebrow">Capítulos</span><h3>Sem volume</h3></div></header><ChapterList chapters={wholeChapters} progress={progress} onEdit={openEdit}/></section>}
       {!volumes.length && !wholeChapters.length && <div className="empty-state"><BookOpen size={30}/><h3>Nenhum capítulo cadastrado</h3><p>Adicione um PDF pela biblioteca para associá-lo a esta obra.</p><Link href="/" className="primary-button">Voltar à biblioteca</Link></div>}
     </section>
+    {editingVolume && <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !busy) setEditingVolume(null); }}><section className="form-modal" role="dialog" aria-modal="true" aria-labelledby="edit-volume-title"><button className="modal-close" type="button" onClick={() => setEditingVolume(null)} aria-label="Fechar"><X size={18}/></button><span className="eyebrow">Organização da obra</span><h2 id="edit-volume-title">Editar volume</h2><label>Número e ordem<input type="number" min="0" step="any" value={editVolumeNumber} onChange={event => setEditVolumeNumber(event.target.value)} autoFocus/></label><label>Título opcional<input value={editVolumeTitle} onChange={event => setEditVolumeTitle(event.target.value)}/></label><div className="confirm-actions"><button className="secondary-button" type="button" onClick={() => setEditingVolume(null)} disabled={busy}>Cancelar</button><button className="primary-button" type="button" onClick={() => void saveVolumeEdit()} disabled={busy}>{busy ? "Salvando…" : "Salvar alterações"}</button></div></section></div>}
     {editing && <div className="modal-backdrop" role="presentation" onMouseDown={e => { if (e.target === e.currentTarget) setEditing(null); }}><section className="form-modal" role="dialog" aria-modal="true"><button className="modal-close" onClick={() => setEditing(null)}>×</button><span className="eyebrow">Metadados do PDF</span><h2>Editar capítulo</h2><label>Título<input value={chapterName} onChange={e => setChapterName(e.target.value)}/></label><label>Número<input type="number" min="0" step="any" value={chapterNumber} onChange={e => setChapterNumber(e.target.value)}/></label><label>Obra<select value={chapterSeries} onChange={e => { setChapterSeries(e.target.value); setChapterVolume(""); }}><option value="">Sem coleção</option>{seriesOptions.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}</select></label><label>Volume<select value={chapterVolume} onChange={e => setChapterVolume(e.target.value)}><option value="">Sem volume</option>{selectedVolumes.map(v => <option key={v.id} value={v.id}>{v.volume_number ? `Volume ${v.volume_number}` : v.title || "Volume"}</option>)}</select></label><button className="primary-button" onClick={() => void saveChapter()}><Check size={17}/> Salvar capítulo</button></section></div>}
+    {deleteVolumeTarget && <ConfirmDialog title={`Excluir ${deleteVolumeTarget.title || `Volume ${deleteVolumeTarget.volume_number || ""}`}?`} message="A organização do volume será removida. Os PDFs e o progresso serão preservados e os capítulos passarão para Sem volume." confirmLabel="Excluir organização" busy={busy} onCancel={() => setDeleteVolumeTarget(null)} onConfirm={() => void removeVolume(deleteVolumeTarget)}/>}
     <footer className="site-footer">nook. <span>Um capítulo de cada vez.</span></footer>
   </main></>;
 }

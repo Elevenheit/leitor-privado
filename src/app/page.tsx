@@ -6,6 +6,7 @@ import { BookOpen, ChevronRight, FilePlus2, FileText, Pencil, Plus, Search, Tras
 import { Upload } from "tus-js-client";
 import type { User } from "@supabase/supabase-js";
 import { AuthGate } from "@/components/auth-gate";
+import { ConfirmDialog } from "@/components/modals/confirm-dialog";
 import { Nav } from "@/components/nav";
 import { BUCKET, supabase } from "@/lib/supabase";
 import { formatSize, type Book, type ReadingProgress, type Series, type Volume } from "@/lib/types";
@@ -41,6 +42,13 @@ function Dashboard({ user }: { user: User }) {
   const [createSeriesInline, setCreateSeriesInline] = useState(false);
   const [createVolumeInline, setCreateVolumeInline] = useState(false);
   const [file, setFile] = useState<File | null>(null);
+  const [editingSeries, setEditingSeries] = useState<Series | null>(null);
+  const [editingBook, setEditingBook] = useState<Book | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editChapterTitle, setEditChapterTitle] = useState("");
+  const [editChapterNumber, setEditChapterNumber] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<{ type: "series"; item: Series } | { type: "book"; item: Book } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -101,20 +109,23 @@ function Dashboard({ user }: { user: User }) {
     else { setVolumes(previous => [...previous, data as Volume]); setSelectedVolume(data.id); setCreateVolumeInline(false); setInlineVolumeNumber(""); setInlineVolumeTitle(""); }
   }
 
-  async function editSeries(item: Series) {
-    const title = window.prompt("Nome da obra", item.title)?.trim();
-    if (!title || title === item.title) return;
-    const description = window.prompt("Descrição (opcional)", item.description || "");
-    if (description === null) return;
-    setBusy(true);
-    const { error: updateError } = await supabase().from("series").update({ title, description: description.trim() || null, updated_at: new Date().toISOString() }).eq("id", item.id).eq("owner_id", user.id);
-    if (updateError) setError(updateError.message); await load(); setBusy(false);
+  function editSeries(item: Series) {
+    setEditingSeries(item); setEditTitle(item.title); setEditDescription(item.description || "");
   }
 
-  async function deleteSeries(item: Series) {
-    if (!window.confirm(`Excluir a organização “${item.title}”? Os PDFs e o progresso serão preservados e ficarão em “Sem coleção”.`)) return;
+  async function saveSeriesEdit() {
+    if (!editingSeries || !editTitle.trim()) return;
+    setBusy(true);
+    const { error: updateError } = await supabase().from("series").update({ title: editTitle.trim(), description: editDescription.trim() || null, updated_at: new Date().toISOString() }).eq("id", editingSeries.id).eq("owner_id", user.id);
+    if (updateError) setError(updateError.message); else setEditingSeries(null);
+    await load(); setBusy(false);
+  }
+
+  function deleteSeries(item: Series) { setDeleteTarget({ type: "series", item }); }
+
+  async function removeSeries(item: Series) {
     setBusy(true); const { error: deleteError } = await supabase().from("series").delete().eq("id", item.id).eq("owner_id", user.id);
-    if (deleteError) setError(deleteError.message); await load(); setBusy(false);
+    if (deleteError) setError(deleteError.message); else setDeleteTarget(null); await load(); setBusy(false);
   }
 
   async function uploadFile() {
@@ -141,22 +152,24 @@ function Dashboard({ user }: { user: User }) {
     finally { setUploading(false); if (inputRef.current) inputRef.current.value = ""; }
   }
 
-  async function deleteBook(book: Book) {
-    if (!window.confirm(`Excluir o PDF “${book.title}” e seu progresso de leitura?`)) return;
+  function deleteBook(book: Book) { setDeleteTarget({ type: "book", item: book }); }
+
+  async function removeBook(book: Book) {
     setBusy(true); setError(""); const api = supabase();
     const { error: storageError } = await api.storage.from(BUCKET).remove([book.file_path]);
     if (storageError) { setError(storageError.message); setBusy(false); return; }
     const { error: dbError } = await api.from("books").delete().eq("id", book.id).eq("owner_id", user.id);
-    if (dbError) setError(`PDF excluído, mas o registro não foi removido: ${dbError.message}`); await load(); setBusy(false);
+    if (dbError) setError(`PDF excluído, mas o registro não foi removido: ${dbError.message}`); else setDeleteTarget(null); await load(); setBusy(false);
   }
 
-  async function editBook(book: Book) {
-    const chapter_title = window.prompt("Título do capítulo", book.chapter_title || book.title)?.trim();
-    if (!chapter_title) return;
-    const num = window.prompt("Número do capítulo (opcional)", book.chapter_number?.toString() || "");
-    if (num === null) return;
-    const { error: updateError } = await supabase().from("books").update({ chapter_title, title: chapter_title, chapter_number: num.trim() ? Number(num) : null, sort_order: num.trim() ? Math.round(Number(num) * 1000) : book.sort_order }).eq("id", book.id).eq("owner_id", user.id);
-    if (updateError) setError(updateError.message); await load();
+  function editBook(book: Book) { setEditingBook(book); setEditChapterTitle(book.chapter_title || book.title); setEditChapterNumber(book.chapter_number?.toString() || ""); }
+
+  async function saveBookEdit() {
+    if (!editingBook || !editChapterTitle.trim()) return;
+    const chapter_number = editChapterNumber.trim() ? Number(editChapterNumber) : null;
+    const { error: updateError } = await supabase().from("books").update({ chapter_title: editChapterTitle.trim(), title: editChapterTitle.trim(), chapter_number, sort_order: chapter_number ? Math.round(chapter_number * 1000) : editingBook.sort_order }).eq("id", editingBook.id).eq("owner_id", user.id);
+    if (updateError) setError(updateError.message); else setEditingBook(null);
+    await load();
   }
 
   const match = (value: string) => value.toLocaleLowerCase().includes(query.toLocaleLowerCase());
@@ -184,5 +197,8 @@ function Dashboard({ user }: { user: User }) {
     </section><footer className="site-footer">nook. <span>Um capítulo de cada vez.</span></footer>
     {showCreate && <div className="modal-backdrop" role="presentation" onMouseDown={e => { if (e.target === e.currentTarget) setShowCreate(false); }}><section className="form-modal" role="dialog" aria-modal="true" aria-labelledby="create-series-title"><button className="modal-close" onClick={() => setShowCreate(false)} aria-label="Fechar"><X size={19}/></button><span className="eyebrow">Nova coleção</span><h2 id="create-series-title">Criar obra</h2><label>Nome da obra<input value={newTitle} onChange={e => setNewTitle(e.target.value)} maxLength={300} autoFocus /></label><label>Descrição opcional<textarea value={newDescription} onChange={e => setNewDescription(e.target.value)} rows={3}/></label><label>Capa opcional (JPEG, PNG ou WebP)<input type="file" accept="image/jpeg,image/png,image/webp" onChange={e => setCoverFile(e.target.files?.[0] || null)}/></label><button className="primary-button" disabled={!newTitle.trim() || busy} onClick={() => void createSeries()}>{busy ? "Salvando…" : "Criar obra"}</button></section></div>}
     {showUpload && <div className="modal-backdrop" role="presentation" onMouseDown={e => { if (e.target === e.currentTarget && !uploading) setShowUpload(false); }}><section className="form-modal upload-modal" role="dialog" aria-modal="true" aria-labelledby="upload-title"><button className="modal-close" onClick={() => !uploading && setShowUpload(false)} aria-label="Fechar"><X size={19}/></button><span className="eyebrow">Acrescentar ao acervo</span><h2 id="upload-title">Enviar PDF</h2><label>Obra<select value={selectedSeries} onChange={e => { setSelectedSeries(e.target.value); setSelectedVolume(""); }}><option value="">Sem coleção</option>{series.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}</select></label><button type="button" className="inline-create" onClick={() => setCreateSeriesInline(!createSeriesInline)}>+ Criar nova obra</button>{createSeriesInline && <div className="inline-create-row"><input aria-label="Nome da nova obra" placeholder="Nome da obra" value={inlineSeriesTitle} onChange={e => setInlineSeriesTitle(e.target.value)}/><button type="button" className="secondary-button" onClick={() => void createSeriesFromUpload()}>Criar</button></div>}<label>Volume<select value={selectedVolume} onChange={e => setSelectedVolume(e.target.value)} disabled={!selectedSeries}><option value="">Sem volume</option>{relevantVolumes.map(v => <option key={v.id} value={v.id}>{v.volume_number ? `Volume ${v.volume_number}` : v.title || "Volume"}</option>)}</select></label>{selectedSeries && <><button type="button" className="inline-create" onClick={() => setCreateVolumeInline(!createVolumeInline)}>+ Criar novo volume</button>{createVolumeInline && <div className="inline-create-row"><input aria-label="Número do novo volume" type="number" placeholder="Número" value={inlineVolumeNumber} onChange={e => setInlineVolumeNumber(e.target.value)}/><input aria-label="Título do novo volume" placeholder="Título (opcional)" value={inlineVolumeTitle} onChange={e => setInlineVolumeTitle(e.target.value)}/><button type="button" className="secondary-button" onClick={() => void createVolumeFromUpload()}>Criar</button></div>}</>}<label>Tipo do PDF<select value={contentType} onChange={e => setContentType(e.target.value as "chapter" | "volume")}><option value="chapter">Capítulo</option><option value="volume">Volume completo</option></select></label><div className="form-row"><label>Número do capítulo/volume<input type="number" min="0" step="any" value={chapterNumber} onChange={e => setChapterNumber(e.target.value)}/></label><label>Título<input value={chapterTitle} onChange={e => setChapterTitle(e.target.value)}/></label></div><label className="file-picker">Arquivo PDF<input ref={inputRef} type="file" accept=".pdf,application/pdf" onChange={e => setFile(e.target.files?.[0] || null)}/></label><div className={`upload-drop ${dragging ? "dragging" : ""}`} onDragOver={e => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={e => { e.preventDefault(); setDragging(false); setFile(e.dataTransfer.files[0] || null); }}><UploadCloud size={19}/>{uploading ? `Enviando… ${uploadPercent}%` : file?.name || "Arraste o PDF ou escolha acima"}{uploading && <div className="upload-track"><div style={{ width: `${uploadPercent}%` }}/></div>}</div><button className="primary-button" disabled={!file || uploading} onClick={() => void uploadFile()}>{uploading ? "Enviando…" : "Enviar PDF"}</button></section></div>}
+    {editingSeries && <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !busy) setEditingSeries(null); }}><section className="form-modal" role="dialog" aria-modal="true" aria-labelledby="edit-series-title"><button className="modal-close" type="button" onClick={() => setEditingSeries(null)} aria-label="Fechar"><X size={18}/></button><span className="eyebrow">Organização da biblioteca</span><h2 id="edit-series-title">Editar obra</h2><label>Nome da obra<input value={editTitle} onChange={event => setEditTitle(event.target.value)} maxLength={300} autoFocus/></label><label>Descrição opcional<textarea value={editDescription} onChange={event => setEditDescription(event.target.value)} rows={3}/></label><div className="confirm-actions"><button className="secondary-button" type="button" onClick={() => setEditingSeries(null)} disabled={busy}>Cancelar</button><button className="primary-button" type="button" onClick={() => void saveSeriesEdit()} disabled={!editTitle.trim() || busy}>{busy ? "Salvando…" : "Salvar alterações"}</button></div></section></div>}
+    {editingBook && <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setEditingBook(null); }}><section className="form-modal" role="dialog" aria-modal="true" aria-labelledby="edit-book-title"><button className="modal-close" type="button" onClick={() => setEditingBook(null)} aria-label="Fechar"><X size={18}/></button><span className="eyebrow">Metadados do capítulo</span><h2 id="edit-book-title">Editar capítulo</h2><label>Título<input value={editChapterTitle} onChange={event => setEditChapterTitle(event.target.value)} autoFocus/></label><label>Número do capítulo<input type="number" min="0" step="any" value={editChapterNumber} onChange={event => setEditChapterNumber(event.target.value)}/></label><div className="confirm-actions"><button className="secondary-button" type="button" onClick={() => setEditingBook(null)}>Cancelar</button><button className="primary-button" type="button" onClick={() => void saveBookEdit()} disabled={!editChapterTitle.trim()}>Salvar alterações</button></div></section></div>}
+    {deleteTarget && <ConfirmDialog title={deleteTarget.type === "series" ? `Excluir “${deleteTarget.item.title}”?` : `Excluir “${deleteTarget.item.title}”?`} message={deleteTarget.type === "series" ? "A organização será removida. Os PDFs e o progresso serão preservados e passarão para Sem coleção." : "O arquivo PDF e o progresso de leitura serão excluídos permanentemente."} confirmLabel={deleteTarget.type === "series" ? "Excluir organização" : "Excluir PDF e progresso"} busy={busy} onCancel={() => setDeleteTarget(null)} onConfirm={() => { if (deleteTarget.type === "series") void removeSeries(deleteTarget.item); else void removeBook(deleteTarget.item); }}/ >}
   </main></>;
 }
