@@ -289,3 +289,31 @@ a { color:inherit; text-decoration:none; }
   .reader-index-list { padding:8px 21px 30px; }
   .reader-app .chapter-navigation>div { flex-wrap:wrap; }
 }
+
+.library-filters { display:flex; align-items:center; gap:3px; padding:3px; border:1px solid #39363a; border-radius:8px; }
+.library-filters button { display:flex; align-items:center; gap:5px; padding:6px 9px; color:#a9a3a1; border:0; border-radius:5px; background:transparent; font-size:11px; }
+.library-filters button.selected { color:#ead6bd; background:#342d2a; }
+.series-copy { position:relative; }
+.series-copy>.series-title { padding-right:26px; }
+.favorite-button { position:absolute; top:12px; right:12px; display:grid; place-items:center; width:29px; height:29px; color:#8f8987; border:0; border-radius:6px; background:transparent; }
+.favorite-button:hover,.favorite-button.active { color:#d9ad78; background:#302a28; }
+.bookmark-panel .reader-index-list { padding-top:20px; }
+.bookmark-create { display:grid; gap:10px; padding-bottom:22px; border-bottom:1px solid #393539; }
+.bookmark-create label { display:grid; gap:7px; color:#aaa3a0; font-size:11px; }
+.bookmark-create input,.bookmark-edit input { width:100%; min-width:0; padding:10px 11px; color:#ece5dc; border:1px solid #48403a; border-radius:7px; background:#151519; outline:none; }
+.bookmark-create .secondary-button { justify-self:start; }
+.bookmark-list { margin:12px 0 0; padding:0; list-style:none; }
+.bookmark-list li { display:flex; align-items:center; gap:3px; flex-wrap:wrap; border-bottom:1px solid #343036; }
+.bookmark-list li>button { flex:0 0 30px; display:grid; place-items:center; min-height:36px; padding:5px; color:#aaa3a0; border:0; background:transparent; }
+.bookmark-list li .bookmark-jump { flex:1 1 auto; display:grid; justify-items:start; gap:4px; padding:12px 5px; text-align:left; }
+.bookmark-jump strong { color:#e2dcd5; font-size:13px; font-weight:500; }
+.bookmark-jump small { color:#a8a09b; font-size:10px; }
+.bookmark-edit { display:flex; flex:1 0 100%; gap:5px; padding:0 4px 11px; }
+.bookmark-edit button { padding:6px; color:#d9ad78; border:0; background:transparent; font-size:11px; }
+.bookmark-empty { padding:20px 0; color:#a9a3a1; font-size:12px; }
+.reader-index-backdrop>.modal-backdrop { z-index:40; }
+@media(max-width:700px) {
+  .toolbar { flex-wrap:wrap; gap:10px; }
+  .toolbar .search { flex:1 1 100%; }
+  .reader-app .reader-settings-button { min-width:30px; }
+}
