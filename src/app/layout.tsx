@@ -1,3 +1,4 @@
+import { DialogFocusManager } from "@/components/modals/dialog-focus-manager";
 import type { Metadata } from "next";
 import { Inter, Literata } from "next/font/google";
 import "./globals.css";
@@ -13,5 +14,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="pt-BR" className={`dark ${inter.variable} ${literata.variable}`}><body className="min-h-screen antialiased">{children}</body></html>;
+  return <html lang="pt-BR" className={`dark ${inter.variable} ${literata.variable}`}><body className="min-h-screen antialiased"><DialogFocusManager />{children}</body></html>;
 }
