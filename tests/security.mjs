@@ -31,6 +31,7 @@ assert.equal((await db.query(`select * from public.beta_access where user_id='${
 await db.exec(`insert into public.beta_access(user_id,role,expires_at) values('${admin}','admin','infinity');`);
 await db.exec(readFileSync("supabase/migrations/006_visible_series_comments.sql", "utf8"));
 await db.exec(readFileSync("supabase/migrations/007_storage_visibility.sql", "utf8"));
+await db.exec(readFileSync("supabase/migrations/008_nonnegative_catalog_numbers.sql", "utf8"));
 await db.exec(
   `grant usage on schema public,auth,storage to authenticated; grant select,insert,update,delete on storage.objects to authenticated; grant execute on function auth.uid() to authenticated;`,
 );
@@ -67,6 +68,11 @@ assert.equal(
 );
 assert.equal((await as(admin, "select * from favorites")).rows.length, 1);
 assert.equal((await as(a, "select * from books")).rows.length, 0);
+await db.exec(`insert into public.volumes(id,owner_id,series_id,volume_number,title) values('77777777-7777-4777-8777-777777777777','${admin}','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',0,'Zero volume');
+insert into public.books(id,owner_id,title,original_filename,file_path,size_bytes,series_id,volume_id,chapter_number,sort_order) values('66666666-6666-4666-8666-666666666666','${admin}','Zero chapter','zero.pdf','${admin}/zero.pdf',1,'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','77777777-7777-4777-8777-777777777777',0,0),('55555555-5555-4555-8555-555555555555','${admin}','Fractional chapter','fraction.pdf','${admin}/fraction.pdf',1,'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','77777777-7777-4777-8777-777777777777',12.5,12500)`);
+assert.deepEqual((await db.query("select chapter_number from public.books where id in ('66666666-6666-4666-8666-666666666666','55555555-5555-4555-8555-555555555555') order by chapter_number")).rows.map(row => Number(row.chapter_number)), [0, 12.5]);
+await assert.rejects(db.exec(`insert into public.volumes(owner_id,series_id,volume_number) values('${admin}','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',-1)`));
+await assert.rejects(db.exec(`insert into public.books(owner_id,title,original_filename,file_path,size_bytes,series_id,chapter_number) values('${admin}','Negative chapter','negative.pdf','${admin}/negative.pdf',1,'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',-0.5)`));
 await db.exec(`insert into public.series(id,owner_id,title,beta_visible) values('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee','${admin}','Hidden series',false);
 insert into public.volumes(id,owner_id,series_id,volume_number,title) values('99999999-9999-4999-8999-999999999999','${admin}','eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',1,'Hidden volume');
 insert into public.books(id,owner_id,title,original_filename,file_path,size_bytes,series_id,volume_id) values('88888888-8888-4888-8888-888888888888','${admin}','Hidden chapter','hidden.pdf','${admin}/hidden.pdf',1,'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee','99999999-9999-4999-8999-999999999999');
@@ -82,7 +88,7 @@ await as(
   admin,
   `update series set beta_visible=true,rights_note='Original test fixture, authorized' where id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'`,
 );
-assert.equal((await as(a, "select * from books")).rows.length, 1);
+assert.equal((await as(a, "select * from books")).rows.length, 3);
 assert.equal((await as(a, "select * from storage.objects")).rows.length, 1);
 assert.equal((await as(a, `select * from storage.objects where name='${admin}/hidden.pdf'`)).rows.length, 0);
 assert.equal((await as(a, `select * from storage.objects where name='${admin}/orphan.pdf'`)).rows.length, 0);

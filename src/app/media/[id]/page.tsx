@@ -94,9 +94,9 @@ function Media({ id, user }: { id: string; user: User }) {
           if (series.error) throw Error("NÃ£o foi possÃ­vel carregar o formato da obra.");
           if (live) setSeriesFormat((series.data?.format as Format | null) || null);
         }
-        restore.current = p.data?.position_seconds || 0;
+        restore.current = p.data?.position_seconds ?? 0;
         scrollRestore.current = p.data?.scroll_ratio || 0;
-        pageRef.current = Math.max(0, (p.data?.page_number || 1) - 1);
+        pageRef.current = Math.max(0, (p.data?.page_number ?? 1) - 1);
         setPage(pageRef.current);
         const signed = await api.storage
           .from(BUCKET)
@@ -246,12 +246,14 @@ function Media({ id, user }: { id: string; user: User }) {
   }
   const target = introTarget(
     Boolean(book?.skip_intro),
-    book?.intro_end || 90,
+    book?.intro_end ?? 90,
     duration,
     time,
   );
-  webtoonRef.current = webtoon;
   const pageElements = useRef<Record<number, HTMLDivElement | null>>({});
+  useEffect(() => {
+    webtoonRef.current = webtoon;
+  }, [webtoon]);
   useEffect(() => {
     if (!webtoon || !count) return;
     const observer = new IntersectionObserver((entries) => {
@@ -490,7 +492,7 @@ function Media({ id, user }: { id: string; user: User }) {
                       src={images[i]}
                       alt={`Página ${i + 1}`}
                       style={{ width: `${zoom}%` }}
-                      onLoad={(e) => {
+                      onLoad={() => {
                         if (
                           i === page &&
                           scrollRestore.current &&

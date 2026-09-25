@@ -67,17 +67,25 @@ function SeriesDetail({ user, id }: { user: User; id: string }) {
   async function createVolume() {
     if (!volumeNumber && !volumeTitle.trim()) return;
     const number = volumeNumber ? Number(volumeNumber) : null;
-    const { error: saveError } = await supabase().from("volumes").insert({ owner_id: user.id, series_id: id, volume_number: number, title: volumeTitle.trim() || null, sort_order: number ? Math.round(number * 1000) : volumes.length * 1000 });
+    if (number !== null && (!Number.isFinite(number) || number < 0)) {
+      setError("O número do volume deve ser zero ou maior.");
+      return;
+    }
+    const { error: saveError } = await supabase().from("volumes").insert({ owner_id: user.id, series_id: id, volume_number: number, title: volumeTitle.trim() || null, sort_order: number !== null ? Math.round(number * 1000) : volumes.length * 1000 });
     if (saveError) setError(saveError.message); else { setVolumeNumber(""); setVolumeTitle(""); await load(); }
   }
   function editVolume(volume: Volume) {
-    setEditingVolume(volume); setEditVolumeNumber(volume.volume_number?.toString() || ""); setEditVolumeTitle(volume.title || "");
+    setEditingVolume(volume); setEditVolumeNumber(volume.volume_number?.toString() ?? ""); setEditVolumeTitle(volume.title || "");
   }
   async function saveVolumeEdit() {
     if (!editingVolume) return;
     const number = editVolumeNumber.trim() ? Number(editVolumeNumber) : null;
+    if (number !== null && (!Number.isFinite(number) || number < 0)) {
+      setError("O número do volume deve ser zero ou maior.");
+      return;
+    }
     setBusy(true);
-    const { error: updateError } = await supabase().from("volumes").update({ volume_number: number, title: editVolumeTitle.trim() || null, sort_order: number ? Math.round(number * 1000) : editingVolume.sort_order, updated_at: new Date().toISOString() }).eq("id", editingVolume.id).eq("owner_id", user.id);
+    const { error: updateError } = await supabase().from("volumes").update({ volume_number: number, title: editVolumeTitle.trim() || null, sort_order: number !== null ? Math.round(number * 1000) : editingVolume.sort_order, updated_at: new Date().toISOString() }).eq("id", editingVolume.id).eq("owner_id", user.id);
     if (updateError) setError(updateError.message); else setEditingVolume(null);
     await load(); setBusy(false);
   }
@@ -89,7 +97,7 @@ function SeriesDetail({ user, id }: { user: User; id: string }) {
     await load(); setBusy(false);
   }
   function openEdit(book: Book) {
-    setEditing(book); setChapterName(book.chapter_title || book.title); setChapterNumber(book.chapter_number?.toString() || ""); setChapterSeries(book.series_id || id); setChapterVolume(book.volume_id || "");
+    setEditing(book); setChapterName(book.chapter_title || book.title); setChapterNumber(book.chapter_number?.toString() ?? ""); setChapterSeries(book.series_id || id); setChapterVolume(book.volume_id || "");
   }
   async function saveChapter() {
     if (!editing || !chapterName.trim()) return;
@@ -99,7 +107,11 @@ function SeriesDetail({ user, id }: { user: User; id: string }) {
       return;
     }
     const number = chapterNumber.trim() ? Number(chapterNumber) : null;
-    const { error: updateError } = await supabase().from("books").update({ title: chapterName.trim(), chapter_title: chapterName.trim(), chapter_number: number, sort_order: number ? Math.round(number * 1000) : editing.sort_order, series_id: chapterSeries || null, volume_id: chapterVolume || null }).eq("id", editing.id).eq("owner_id", user.id);
+    if (number !== null && (!Number.isFinite(number) || number < 0)) {
+      setError("O número do capítulo deve ser zero ou maior.");
+      return;
+    }
+    const { error: updateError } = await supabase().from("books").update({ title: chapterName.trim(), chapter_title: chapterName.trim(), chapter_number: number, sort_order: number !== null ? Math.round(number * 1000) : editing.sort_order, series_id: chapterSeries || null, volume_id: chapterVolume || null }).eq("id", editing.id).eq("owner_id", user.id);
     if (updateError) setError(updateError.message); else setEditing(null);
     await load();
   }
@@ -116,20 +128,20 @@ function SeriesDetail({ user, id }: { user: User; id: string }) {
   if (!series) return <><Nav back/><main className="reader-status"><h1>Obra não encontrada</h1><p>{error || "A obra não existe ou você não tem acesso."}</p><Link className="primary-button" href="/">Voltar</Link></main></>;
   return <><Nav back/><main className="series-page">
     <Link className="back-link" href="/"><ArrowLeft size={16}/> Biblioteca</Link>
-    <section className="series-hero"><div className="series-hero-cover" style={coverUrl ? { backgroundImage: `linear-gradient(0deg,#171518e8,transparent 75%),url("${coverUrl}")`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}><span>✦</span><strong>{series.title}</strong></div><div className="series-hero-copy"><span className="eyebrow">Na sua biblioteca</span><h1>{series.title}</h1>{series.description && <p>{series.description}</p>}<div className="series-stats"><span>{volumes.length} {volumes.length === 1 ? "volume" : "volumes"}</span><span>{chapterCount} {chapterCount === 1 ? "capítulo" : "capítulos"}</span>{overallProgress > 0 && <span>{overallProgress}% iniciados</span>}</div>{lastRead && <Link className="last-read" href={mediaHref(lastRead)}><BookOpen size={16}/> Continuar: {lastRead.chapter_number ? `Capítulo ${lastRead.chapter_number}` : lastRead.chapter_title || lastRead.title} <ChevronRight size={15}/></Link>}</div></section>
+    <section className="series-hero"><div className="series-hero-cover" style={coverUrl ? { backgroundImage: `linear-gradient(0deg,#171518e8,transparent 75%),url("${coverUrl}")`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}><span>✦</span><strong>{series.title}</strong></div><div className="series-hero-copy"><span className="eyebrow">Na sua biblioteca</span><h1>{series.title}</h1>{series.description && <p>{series.description}</p>}<div className="series-stats"><span>{volumes.length} {volumes.length === 1 ? "volume" : "volumes"}</span><span>{chapterCount} {chapterCount === 1 ? "capítulo" : "capítulos"}</span>{overallProgress > 0 && <span>{overallProgress}% iniciados</span>}</div>{lastRead && <Link className="last-read" href={mediaHref(lastRead)}> <BookOpen size={16}/> Continuar: {lastRead.chapter_number !== null ? `Capítulo ${lastRead.chapter_number}` : lastRead.chapter_title || lastRead.title} <ChevronRight size={15}/></Link>}</div></section>
     {error && <div className="error dashboard-error">{error}<button onClick={() => setError("")}>×</button></div>}
     <section className="volumes-section"><div className="section-head"><div><span className="eyebrow">Organize sua leitura</span><h2>Volumes <span className="count">{volumes.length}</span></h2></div></div>
       <form className="new-volume-form" onSubmit={e => { e.preventDefault(); void createVolume(); }}><label>Número<input type="number" min="0" step="any" placeholder="16" value={volumeNumber} onChange={e => setVolumeNumber(e.target.value)}/></label><label>Título opcional<input placeholder="Subtítulo do volume" value={volumeTitle} onChange={e => setVolumeTitle(e.target.value)}/></label><button className="secondary-button" type="submit"><Plus size={16}/> Criar volume</button></form>
       {volumes.map(volume => {
         const chapters = books.filter(book => book.volume_id === volume.id);
-        return <section className="volume-section" key={volume.id}><header className="volume-heading"><div><span className="eyebrow">{volume.volume_number ? `Volume ${volume.volume_number}` : "Volume"}</span><h3>{volume.title || `Volume ${volume.volume_number || "sem número"}`}</h3><small>{chapters.length} {chapters.length === 1 ? "capítulo" : "capítulos"}</small></div><div className="volume-actions"><button aria-label="Editar e reorganizar volume" onClick={() => void editVolume(volume)}><Pencil size={16}/></button><button aria-label="Excluir volume" onClick={() => void deleteVolume(volume)}><Trash2 size={16}/></button></div></header><ChapterList chapters={chapters} progress={progress} onEdit={openEdit}/></section>;
+        return <section className="volume-section" key={volume.id}><header className="volume-heading"><div><span className="eyebrow">{volume.volume_number !== null ? `Volume ${volume.volume_number}` : "Volume"}</span><h3>{volume.title || `Volume ${volume.volume_number ?? "sem número"}`}</h3><small>{chapters.length} {chapters.length === 1 ? "capítulo" : "capítulos"}</small></div><div className="volume-actions"><button aria-label="Editar e reorganizar volume" onClick={() => void editVolume(volume)}><Pencil size={16}/></button><button aria-label="Excluir volume" onClick={() => void deleteVolume(volume)}><Trash2 size={16}/></button></div></header><ChapterList chapters={chapters} progress={progress} onEdit={openEdit}/></section>;
       })}
       {wholeChapters.length > 0 && <section className="volume-section"><header className="volume-heading"><div><span className="eyebrow">Capítulos</span><h3>Sem volume</h3></div></header><ChapterList chapters={wholeChapters} progress={progress} onEdit={openEdit}/></section>}
       {!volumes.length && !wholeChapters.length && <div className="empty-state"><BookOpen size={30}/><h3>Nenhum capítulo cadastrado</h3><p>Adicione um PDF pela biblioteca para associá-lo a esta obra.</p><Link href="/" className="primary-button">Voltar à biblioteca</Link></div>}
     </section>
     {editingVolume && <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !busy) setEditingVolume(null); }}><section className="form-modal" role="dialog" aria-modal="true" aria-labelledby="edit-volume-title"><button className="modal-close" type="button" onClick={() => setEditingVolume(null)} aria-label="Fechar"><X size={18}/></button><span className="eyebrow">Organização da obra</span><h2 id="edit-volume-title">Editar volume</h2><label>Número e ordem<input type="number" min="0" step="any" value={editVolumeNumber} onChange={event => setEditVolumeNumber(event.target.value)} autoFocus/></label><label>Título opcional<input value={editVolumeTitle} onChange={event => setEditVolumeTitle(event.target.value)}/></label><div className="confirm-actions"><button className="secondary-button" type="button" onClick={() => setEditingVolume(null)} disabled={busy}>Cancelar</button><button className="primary-button" type="button" onClick={() => void saveVolumeEdit()} disabled={busy}>{busy ? "Salvando…" : "Salvar alterações"}</button></div></section></div>}
-    {editing && <div className="modal-backdrop" role="presentation" onMouseDown={e => { if (e.target === e.currentTarget) setEditing(null); }}><section className="form-modal" role="dialog" aria-modal="true" aria-labelledby="edit-chapter-title"><button className="modal-close" onClick={() => setEditing(null)} aria-label="Fechar">×</button><span className="eyebrow">Metadados do PDF</span><h2 id="edit-chapter-title">Editar capítulo</h2><label>Título<input value={chapterName} onChange={e => setChapterName(e.target.value)}/></label><label>Número<input type="number" min="0" step="any" value={chapterNumber} onChange={e => setChapterNumber(e.target.value)}/></label><label>Obra<select value={chapterSeries} onChange={e => { setChapterSeries(e.target.value); setChapterVolume(""); }}><option value="">Sem coleção</option>{seriesOptions.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}</select></label><label>Volume<select value={chapterVolume} onChange={e => setChapterVolume(e.target.value)}><option value="">Sem volume</option>{selectedVolumes.map(v => <option key={v.id} value={v.id}>{v.volume_number ? `Volume ${v.volume_number}` : v.title || "Volume"}</option>)}</select></label><button className="primary-button" onClick={() => void saveChapter()}><Check size={17}/> Salvar capítulo</button></section></div>}
-    {deleteVolumeTarget && <ConfirmDialog title={`Excluir ${deleteVolumeTarget.title || `Volume ${deleteVolumeTarget.volume_number || ""}`}?`} message="A organização do volume será removida. Os PDFs e o progresso serão preservados e os capítulos passarão para Sem volume." confirmLabel="Excluir organização" busy={busy} onCancel={() => setDeleteVolumeTarget(null)} onConfirm={() => void removeVolume(deleteVolumeTarget)}/>}
+    {editing && <div className="modal-backdrop" role="presentation" onMouseDown={e => { if (e.target === e.currentTarget) setEditing(null); }}><section className="form-modal" role="dialog" aria-modal="true" aria-labelledby="edit-chapter-title"><button className="modal-close" onClick={() => setEditing(null)} aria-label="Fechar">×</button><span className="eyebrow">Metadados do PDF</span><h2 id="edit-chapter-title">Editar capítulo</h2><label>Título<input value={chapterName} onChange={e => setChapterName(e.target.value)}/></label><label>Número<input type="number" min="0" step="any" value={chapterNumber} onChange={e => setChapterNumber(e.target.value)}/></label><label>Obra<select value={chapterSeries} onChange={e => { setChapterSeries(e.target.value); setChapterVolume(""); }}><option value="">Sem coleção</option>{seriesOptions.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}</select></label><label>Volume<select value={chapterVolume} onChange={e => setChapterVolume(e.target.value)}><option value="">Sem volume</option>{selectedVolumes.map(v => <option key={v.id} value={v.id}>{v.volume_number !== null ? `Volume ${v.volume_number}` : v.title || "Volume"}</option>)}</select></label><button className="primary-button" onClick={() => void saveChapter()}><Check size={17}/> Salvar capítulo</button></section></div>}
+    {deleteVolumeTarget && <ConfirmDialog title={`Excluir ${deleteVolumeTarget.title || `Volume ${deleteVolumeTarget.volume_number ?? ""}`}?`} message="A organização do volume será removida. Os PDFs e o progresso serão preservados e os capítulos passarão para Sem volume." confirmLabel="Excluir organização" busy={busy} onCancel={() => setDeleteVolumeTarget(null)} onConfirm={() => void removeVolume(deleteVolumeTarget)}/>}
     <footer className="site-footer">nook. <span>Um capítulo de cada vez.</span></footer>
   </main></>;
 }

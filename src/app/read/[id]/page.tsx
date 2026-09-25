@@ -249,7 +249,7 @@ function Reader({ user, id }: { user: User; id: string }) {
         const saved = allUserProgress.find((item) => item.book_id === id);
         const start = Math.min(
           loaded.numPages,
-          Math.max(1, saved?.page_number || 1),
+          Math.max(1, saved?.page_number ?? 1),
         );
         setBook(current);
         setSeries(workResult.data as Series | null);
@@ -711,8 +711,8 @@ function Reader({ user, id }: { user: User; id: string }) {
 
   const pageCaption =
     book?.content_type === "volume"
-      ? `Volume completo${book.chapter_number ? ` ${book.chapter_number}` : ""}${book.chapter_title ? ` · ${book.chapter_title}` : ""}`
-      : book?.chapter_number
+      ? `Volume completo${book.chapter_number !== null ? ` ${book.chapter_number}` : ""}${book.chapter_title ? ` · ${book.chapter_title}` : ""}`
+      : book?.chapter_number !== null && book?.chapter_number !== undefined
         ? `Capítulo ${book.chapter_number}${book.chapter_title ? ` · ${book.chapter_title}` : ""}`
         : book?.chapter_title || book?.title;
   return (
@@ -734,7 +734,7 @@ function Reader({ user, id }: { user: User; id: string }) {
           <strong>{series?.title || book?.title}</strong>
           <span>
             {volume
-              ? volume.volume_number
+              ? volume.volume_number !== null
                 ? `Volume ${volume.volume_number}`
                 : volume.title
               : ""}

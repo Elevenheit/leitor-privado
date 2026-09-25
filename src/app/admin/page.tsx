@@ -238,7 +238,7 @@ function Dashboard({ user }: { user: User }) {
         series_id: selectedSeries,
         volume_number: number,
         title: inlineVolumeTitle.trim() || null,
-        sort_order: number ? Math.round(number * 1000) : volumes.length * 1000,
+        sort_order: number !== null ? Math.round(number * 1000) : volumes.length * 1000,
       })
       .select()
       .single();
@@ -319,6 +319,11 @@ function Dashboard({ user }: { user: User }) {
   async function uploadFile() {
     if (!file || uploading || !selectedSeries || !selectedFormat) return;
     setError("");
+    const parsedChapterNumber = chapterNumber.trim() !== "" ? Number(chapterNumber) : null;
+    if (parsedChapterNumber !== null && (!Number.isFinite(parsedChapterNumber) || parsedChapterNumber < 0)) {
+      setError("O número do capítulo deve ser zero ou maior.");
+      return;
+    }
     const extension = file.name.split(".").pop()?.toLowerCase() || "";
     const mediaType = selectedFormat === "novel" ? "pdf" : selectedFormat === "anime" ? "video" : "cbz";
     if (mediaType === "pdf" && extension !== "pdf") {
@@ -358,10 +363,10 @@ function Dashboard({ user }: { user: User }) {
         size_bytes: file.size,
         series_id: selectedSeries || null,
         volume_id: selectedVolume || null,
-        chapter_number: chapterNumber ? Number(chapterNumber) : null,
+        chapter_number: parsedChapterNumber,
         chapter_title: chapterTitle.trim() || null,
-        sort_order: chapterNumber
-          ? Math.round(Number(chapterNumber) * 1000)
+        sort_order: parsedChapterNumber !== null
+          ? Math.round(parsedChapterNumber * 1000)
           : 0,
         content_type: contentType,
         media_type: mediaType,
@@ -401,7 +406,7 @@ function Dashboard({ user }: { user: User }) {
   function editBook(book: Book) {
     setEditingBook(book);
     setEditChapterTitle(book.chapter_title || book.title);
-    setEditChapterNumber(book.chapter_number?.toString() || "");
+    setEditChapterNumber(book.chapter_number?.toString() ?? "");
   }
 
   async function saveBookEdit() {
@@ -409,13 +414,17 @@ function Dashboard({ user }: { user: User }) {
     const chapter_number = editChapterNumber.trim()
       ? Number(editChapterNumber)
       : null;
+    if (chapter_number !== null && (!Number.isFinite(chapter_number) || chapter_number < 0)) {
+      setError("O número do capítulo deve ser zero ou maior.");
+      return;
+    }
     const { error: updateError } = await supabase()
       .from("books")
       .update({
         chapter_title: editChapterTitle.trim(),
         title: editChapterTitle.trim(),
         chapter_number,
-        sort_order: chapter_number
+        sort_order: chapter_number !== null
           ? Math.round(chapter_number * 1000)
           : editingBook.sort_order,
       })
@@ -674,7 +683,7 @@ function Dashboard({ user }: { user: User }) {
                           {lastBook && (
                             <small className="series-last">
                               Última leitura ·{" "}
-                              {lastBook.chapter_number
+                              {lastBook.chapter_number !== null
                                 ? `Cap. ${lastBook.chapter_number}`
                                 : `p. ${progress[lastBook.id].page_number}`}
                             </small>
@@ -938,7 +947,7 @@ function Dashboard({ user }: { user: User }) {
                   <option value="">Sem volume</option>
                   {relevantVolumes.map((v) => (
                     <option key={v.id} value={v.id}>
-                      {v.volume_number
+                      {v.volume_number !== null
                         ? `Volume ${v.volume_number}`
                         : v.title || "Volume"}
                     </option>
