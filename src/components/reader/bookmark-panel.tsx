@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Bookmark, Pencil, Trash2, X } from "lucide-react";
 import { ConfirmDialog } from "@/components/modals/confirm-dialog";
-import { supabase } from "@/lib/supabase";
+import { createBookmark, deleteBookmark, listBookmarks, renameBookmark } from "@/lib/data/bookmarks";
+import { toDataError } from "@/lib/data/errors";
 import type { ReadingBookmark } from "@/lib/types";
 
 type Position = Pick<ReadingBookmark, "page_number" | "line_index" | "scroll_ratio">;
@@ -24,10 +25,9 @@ export function BookmarkPanel({ bookId, ownerId, position, onJump, onClose }: {
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
-    const { data, error: loadError } = await supabase().from("reading_bookmarks").select("*").eq("owner_id", ownerId).eq("book_id", bookId).order("created_at", { ascending: false });
-    setItems((data || []) as ReadingBookmark[]);
-    setError(loadError ? `Não foi possível carregar marcadores: ${loadError.message}` : "");
-    setLoading(false);
+    try { setItems(await listBookmarks(ownerId, bookId)); setError(""); }
+    catch (cause) { setError(toDataError(cause, "Could not load bookmarks.").message); }
+    finally { setLoading(false); }
   }, [bookId, ownerId]);
 
   // Fetch this chapter's markers only when the panel opens.
@@ -36,23 +36,23 @@ export function BookmarkPanel({ bookId, ownerId, position, onJump, onClose }: {
 
   async function create() {
     setBusy(true); setError("");
-    const { error: saveError } = await supabase().from("reading_bookmarks").insert({ book_id: bookId, owner_id: ownerId, ...position(), label: label.trim() || null });
-    if (saveError) setError(saveError.message); else { setLabel(""); await load(); }
-    setBusy(false);
+    try { await createBookmark(ownerId, bookId, position(), label.trim() || null); setLabel(""); await load(); }
+    catch (cause) { setError(toDataError(cause, "Could not save bookmark.").message); }
+    finally { setBusy(false); }
   }
 
   async function rename(item: ReadingBookmark) {
     setBusy(true); setError("");
-    const { error: saveError } = await supabase().from("reading_bookmarks").update({ label: label.trim() || null }).eq("id", item.id).eq("owner_id", ownerId).eq("book_id", bookId);
-    if (saveError) setError(saveError.message); else { setEditing(null); setLabel(""); await load(); }
-    setBusy(false);
+    try { await renameBookmark(ownerId, bookId, item.id, label.trim() || null); setEditing(null); setLabel(""); await load(); }
+    catch (cause) { setError(toDataError(cause, "Could not rename bookmark.").message); }
+    finally { setBusy(false); }
   }
 
   async function remove(item: ReadingBookmark) {
     setBusy(true); setError("");
-    const { error: deleteError } = await supabase().from("reading_bookmarks").delete().eq("id", item.id).eq("owner_id", ownerId).eq("book_id", bookId);
-    if (deleteError) setError(deleteError.message); else { setDeleteTarget(null); await load(); }
-    setBusy(false);
+    try { await deleteBookmark(ownerId, bookId, item.id); setDeleteTarget(null); await load(); }
+    catch (cause) { setError(toDataError(cause, "Could not delete bookmark.").message); }
+    finally { setBusy(false); }
   }
 
   return <div className="reader-index-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>

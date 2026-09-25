@@ -2,6 +2,8 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { deleteComment, listComments, reportComment, saveComment } from "@/lib/data/comments";
+import { toDataError } from "@/lib/data/errors";
 type Comment = {
   id: string;
   owner_id: string;
@@ -28,37 +30,18 @@ export function Comments({
   const [error, setError] = useState("");
   const [admin, setAdmin] = useState(false);
   const load = useCallback(async () => {
-    const r = await supabase()
-      .from("comments")
-      .select("id,owner_id,body,spoiler,parent_id,created_at")
-      .eq("series_id", seriesId)
-      .order("created_at", { ascending: false })
-      .order("id")
-      .range(page * 20, page * 20 + 19);
-    if (r.error) setError("A conversa não carregou. Tente atualizar.");
-    else {
-      const identities = await supabase()
-        .from("profile_identities")
-        .select("id,nickname,avatar,avatar_path")
-        .in("id", [...new Set((r.data || []).map((c) => c.owner_id))]);
-      const profiles = await Promise.all(
-        (identities.data || []).map(async (p) => ({
-          ...p,
-          avatar_url: p.avatar_path
-            ? (
-                await supabase()
-                  .storage.from("profiles")
-                  .createSignedUrl(p.avatar_path, 3600)
-              ).data?.signedUrl
-            : undefined,
-        })),
-      );
-      setRows(
-        (r.data || []).map((c) => ({
-          ...c,
-          profiles: profiles.find((p) => p.id === c.owner_id) || null,
-        })),
-      );
+    try {
+      const comments = await listComments(seriesId, page);
+      const identities = await supabase().from("profile_identities").select("id,nickname,avatar,avatar_path").in("id", [...new Set(comments.map((comment) => comment.owner_id))]);
+      if (identities.error) throw identities.error;
+      const profiles = await Promise.all((identities.data || []).map(async (profile) => ({
+        ...profile,
+        avatar_url: profile.avatar_path ? (await supabase().storage.from("profiles").createSignedUrl(profile.avatar_path, 3600)).data?.signedUrl : undefined,
+      })));
+      setRows(comments.map((comment) => ({ ...comment, profiles: profiles.find((profile) => profile.id === comment.owner_id) || null })));
+      setError("");
+    } catch (cause) {
+      setError(toDataError(cause, "Conversation could not be loaded.").message);
     }
   }, [seriesId, page]);
   useEffect(() => {
@@ -98,53 +81,31 @@ export function Comments({
     setBusy(true);
     setError("");
     try {
-      const r = editing
-        ? await supabase()
-            .from("comments")
-            .update({ body: body.trim(), spoiler })
-            .eq("id", editing)
-            .eq("owner_id", userId)
-        : await supabase().from("comments").insert({
-            series_id: seriesId,
-            owner_id: userId,
-            body: body.trim(),
-            spoiler,
-            parent_id: reply,
-          });
-      if (r.error) throw r.error;
+      await saveComment({ series_id: seriesId, owner_id: userId, body: body.trim(), spoiler, parent_id: reply }, editing || undefined);
       setBody("");
       setEditing(null);
       setReply(null);
       await load();
-    } catch {
-      setError(
-        "Não foi possível publicar. Espere 15 segundos e confira sua conexão.",
-      );
+    } catch (cause) {
+      setError(toDataError(cause, "Could not publish comment. Wait 15 seconds and retry.").message);
     } finally {
       setBusy(false);
     }
   }
   async function remove(id: string) {
-    if (!confirm("Excluir este comentário?")) return;
-    const { error } = await supabase().from("comments").delete().eq("id", id);
-    if (error) setError("Não foi possível excluir.");
-    else await load();
+    if (!confirm("Excluir este comentario?")) return;
+    try { await deleteComment(id); await load(); }
+    catch (cause) { setError(toDataError(cause, "Nao foi possivel excluir.").message); }
   }
   async function report(id: string) {
     const reason = prompt("Por que deseja denunciar? (3 a 500 caracteres)");
     if (!reason || reason.trim().length < 3) return;
-    const { error } = await supabase()
-      .from("comment_reports")
-      .insert({
-        comment_id: id,
-        owner_id: userId,
-        reason: reason.trim().slice(0, 500),
-      });
-    setError(
-      error
-        ? "Denúncia já enviada ou falha de conexão."
-        : "Denúncia enviada para a administração.",
-    );
+    try {
+      await reportComment(id, userId, reason.trim().slice(0, 500));
+      setError("Denuncia enviada para a administracao.");
+    } catch (cause) {
+      setError(toDataError(cause, "Denuncia ja enviada ou falha de conexao.").message);
+    }
   }
   return (
     <section className="conversation">

@@ -1,7 +1,7 @@
 export type Book = {
-  media_type?: "pdf" | "cbz" | "video";
-  skip_intro?: boolean;
-  intro_end?: number;
+  media_type: "pdf" | "cbz" | "video";
+  skip_intro: boolean;
+  intro_end: number;
   id: string;
   owner_id: string;
   title: string;
@@ -19,7 +19,7 @@ export type Book = {
 };
 
 export type Series = {
-  format?: "novel" | "manga" | "manhwa" | "anime";
+  format: "novel" | "manga" | "manhwa" | "anime";
   id: string;
   owner_id: string;
   title: string;
@@ -27,6 +27,9 @@ export type Series = {
   cover_path: string | null;
   created_at: string;
   updated_at: string;
+  tags: string[];
+  rights_note: string | null;
+  beta_visible: boolean;
   is_favorite?: boolean;
 };
 
@@ -50,6 +53,8 @@ export type ReadingProgress = {
   scroll_ratio: number;
   reading_mode: "text" | "page";
   updated_at: string;
+  completed: boolean;
+  position_seconds: number;
 };
 
 export type ReadingBookmark = {

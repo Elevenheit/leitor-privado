@@ -5,6 +5,8 @@ import { useEffect, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { Search } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { listFavoriteIds, setFavorite } from "@/lib/data/favorites";
+import { toDataError } from "@/lib/data/errors";
 import { formats, type Format } from "@/lib/catalog";
 import type { Series } from "@/lib/types";
 import { Nav } from "./nav";
@@ -33,12 +35,7 @@ export function Catalog({
       setError("");
       try {
         const api = supabase();
-        const f = await api
-          .from("favorites")
-          .select("series_id")
-          .eq("owner_id", user.id);
-        if (f.error) throw f.error;
-        const ids = (f.data || []).map((x) => x.series_id);
+        const ids = await listFavoriteIds(user.id);
         setFavs(ids);
         let query = api
           .from("series")
@@ -84,17 +81,12 @@ export function Catalog({
   }, [user.id, format, list, q, page]);
   async function favorite(id: string) {
     const had = favs.includes(id);
-    const r = had
-      ? await supabase()
-          .from("favorites")
-          .delete()
-          .eq("owner_id", user.id)
-          .eq("series_id", id)
-      : await supabase()
-          .from("favorites")
-          .upsert({ owner_id: user.id, series_id: id });
-    if (r.error) setError("Não foi possível salvar sua lista.");
-    else setFavs((old) => (had ? old.filter((x) => x !== id) : [...old, id]));
+    try {
+      await setFavorite(user.id, id, !had);
+      setFavs((old) => had ? old.filter((x) => x !== id) : [...old, id]);
+    } catch (cause) {
+      setError(toDataError(cause, "Nao foi possivel salvar sua lista.").message);
+    }
   }
   return (
     <>
