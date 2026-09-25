@@ -18,7 +18,14 @@ export async function findDuplicateBook(seriesId: string, filename: string) {
 
 export async function findOrCreateVolume(ownerId: string, seriesId: string, volumeNumber: number, existingId?: string) {
   if (existingId) return existingId;
+  const current = await supabase().from("volumes").select("id").eq("series_id", seriesId).eq("volume_number", volumeNumber).limit(1).maybeSingle();
+  const found = throwOnError(current, "Não foi possível verificar volumes existentes.");
+  if (found?.id) return found.id as string;
   const result = await supabase().from("volumes").insert({ owner_id: ownerId, series_id: seriesId, volume_number: volumeNumber, sort_order: Math.round(volumeNumber * 1000) }).select("id").single();
+  if (result.error) {
+    const raced = await supabase().from("volumes").select("id").eq("series_id", seriesId).eq("volume_number", volumeNumber).limit(1).maybeSingle();
+    if (raced.data?.id) return raced.data.id as string;
+  }
   const volume = throwOnError(result, "Não foi possível criar o volume.");
   if (!volume) throw new DataError("Não foi possível criar o volume.", "unknown");
   return volume.id as string;
