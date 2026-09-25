@@ -609,7 +609,7 @@ function Dashboard({ user }: { user: User }) {
                       setShowBatchUpload(true);
                     }}
                   >
-                    Adicionar vários PDFs
+                    Adicionar arquivos em lote
                   </button>
                   <button
                     onClick={() => {
