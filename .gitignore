@@ -1,10 +1,15 @@
 node_modules/
 .next/
 .env
-.env.local
-*.tsbuildinfo
 .env.*
 !.env.example
+*.tsbuildinfo
+
+# Local backups and test outputs
 backups/
+artifacts/
+coverage/
 test-results/
 playwright-report/
+blob-report/
+.playwright/

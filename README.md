@@ -16,7 +16,7 @@ npx playwright install chromium
 npm run test:browser
 ```
 
-Use Node 24.21 (versão verificada) e preencha somente as duas variáveis públicas em `.env.local` com o projeto de teste. A aplicação exige a migração 005; não a aponte para o banco antigo sem migrar primeiro uma cópia aprovada.
+Use Node 24.21 (versão verificada) e preencha somente as duas variáveis públicas em `.env.local` com o projeto de teste. A aplicação exige as migrations 005 e 006; não a aponte para o banco antigo sem migrar primeiro uma cópia aprovada.
 
 - [Configuração, backup, reversão e roteiro de sete dias](docs/BETA.md)
 - [Resultados e limitações de cada recurso](docs/STATUS.md)
