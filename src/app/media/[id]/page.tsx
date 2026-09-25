@@ -1,21 +1,23 @@
 /* eslint-disable @next/next/no-img-element -- Private signed and blob URLs must stay in the browser, avoiding an image proxy. */
 "use client";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { User } from "@supabase/supabase-js";
 import { AuthGate } from "@/components/auth-gate";
 import { Nav } from "@/components/nav";
 import { supabase, BUCKET } from "@/lib/supabase";
+import { saveReadingProgress } from "@/lib/data/progress";
 import { calculateReadingProgress, introTarget, CBZ_LIMITS } from "@/lib/media-rules";
 import type { Book } from "@/lib/types";
 import type { Format } from "@/lib/catalog";
 import { mediaHref } from "@/lib/catalog";
 export default function Page() {
   const { id } = useParams<{ id: string }>();
-  return <AuthGate>{(u) => <Media key={id} id={id} user={u} />}</AuthGate>;
+  const router = useRouter();
+  return <AuthGate>{(u) => <Media key={id} id={id} user={u} router={router} />}</AuthGate>;
 }
-function Media({ id, user }: { id: string; user: User }) {
+function Media({ id, user, router }: { id: string; user: User; router: ReturnType<typeof useRouter> }) {
   const [book, setBook] = useState<Book | null>(null);
   const [seriesFormat, setSeriesFormat] = useState<Format | null>(null);
   const webtoon = book?.media_type === "cbz" && (seriesFormat === "manga" || seriesFormat === "manhwa");
@@ -42,41 +44,63 @@ function Media({ id, user }: { id: string; user: User }) {
   const pageRef = useRef(0);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
   const ready = useRef(false);
+  const saveVersion = useRef(0);
   const scrollRestore = useRef(0);
   const imageArea = useRef<HTMLDivElement | null>(null);
   const save = useCallback(
     async (seconds: number, p: number, reachedEnd = false, ratio?: number) => {
       if (!ready.current) return;
-      const calculated = book
-        ? calculateReadingProgress({
-            mediaType: book.media_type,
-            pageNumber: p + 1,
-            totalPages: book.media_type === "video" ? null : count,
-            scrollRatio: ratio,
-            positionSeconds: seconds,
-            durationSeconds: duration,
-            reachedEnd,
-          })
-        : { completed: false };
-      const { error: saveError } = await supabase()
-        .from("reading_progress")
-        .upsert(
-          {
-            owner_id: user.id,
-            book_id: id,
-            page_number: p + 1,
-            position_seconds: Math.max(0, seconds),
-            scroll_ratio: Math.min(1, Math.max(0, ratio ?? 0)),
-            reading_mode: "page",
-            completed: calculated.completed,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "owner_id,book_id" },
-        );
-      setStatus(saveError ? "Progresso nao salvo. Confira a conexao." : "Progresso salvo");
+      const version = ++saveVersion.current;
+      try {
+        const calculated = book
+          ? calculateReadingProgress({
+              mediaType: book.media_type,
+              pageNumber: p + 1,
+              totalPages: book.media_type === "video" ? null : count,
+              scrollRatio: ratio,
+              positionSeconds: seconds,
+              durationSeconds: duration,
+              reachedEnd,
+            })
+          : { completed: false };
+        await saveReadingProgress(user.id, id, {
+          page_number: p + 1,
+          position_seconds: Math.max(0, seconds),
+          scroll_ratio: Math.min(1, Math.max(0, ratio ?? 0)),
+          reading_mode: "page",
+          completed: calculated.completed,
+        });
+        if (version === saveVersion.current) setStatus("Progresso salvo");
+      } catch {
+        if (version === saveVersion.current)
+          setStatus("Progresso nao salvo. Confira a conexao.");
+      }
     },
     [book, count, duration, id, user.id],
   );
+  useEffect(() => {
+    const persist = (event?: Event) => {
+      if (event?.type === "visibilitychange" && document.visibilityState !== "hidden") return;
+      const player = video.current;
+      if (player) {
+        void save(player.currentTime, 0, player.ended);
+        return;
+      }
+      const area = imageArea.current;
+      if (!area) return;
+      const top = area.getBoundingClientRect().top + window.scrollY;
+      const ratio = webtoon
+        ? (window.scrollY - top) / Math.max(1, area.scrollHeight - window.innerHeight)
+        : area.scrollTop / Math.max(1, area.scrollHeight - area.clientHeight);
+      void save(0, pageRef.current, false, ratio);
+    };
+    document.addEventListener("visibilitychange", persist);
+    window.addEventListener("pagehide", persist);
+    return () => {
+      document.removeEventListener("visibilitychange", persist);
+      window.removeEventListener("pagehide", persist);
+    };
+  }, [save, webtoon]);
   useEffect(() => {
     const urls = objectUrls.current;
     let live = true;
@@ -383,7 +407,7 @@ function Media({ id, user }: { id: string; user: User }) {
                   if (video.current) {
                     video.current.currentTime = target;
                     setTime(target);
-                    void save(target, 0, target >= duration);
+                  void save(target, 0, target >= duration);
                   }
                 }}
               >
@@ -533,7 +557,13 @@ function Media({ id, user }: { id: string; user: User }) {
           {status}
         </p>
         {next && (
-          <Link className="primary-button" href={mediaHref(next)}>
+          <Link className="primary-button" href={mediaHref(next)} onClick={(event) => {
+            if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            event.preventDefault();
+            void save(video.current?.currentTime || 0, pageRef.current, video.current?.ended || false).finally(() => {
+              router.push(mediaHref(next));
+            });
+          }}>
             Próximo {book?.media_type === "video" ? "episódio" : "capítulo"} →
           </Link>
         )}

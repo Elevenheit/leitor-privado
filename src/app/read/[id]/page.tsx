@@ -23,12 +23,14 @@ import { Nav } from "@/components/nav";
 import { BookmarkPanel } from "@/components/reader/bookmark-panel";
 import { InlineIllustration } from "@/components/reader/inline-illustration";
 import { ReaderIndex } from "@/components/reader/reader-index";
+import { LazyPdfPage } from "@/components/reader/lazy-pdf-page";
 import { sortBooks } from "@/lib/reader-navigation";
 import {
   createReaderIllustrationExtractor,
   type ReaderIllustration,
 } from "@/lib/reader-illustrations";
 import { BUCKET, supabase } from "@/lib/supabase";
+import { saveReadingProgress } from "@/lib/data/progress";
 import { calculateReadingProgress } from "@/lib/media-rules";
 import { extractReadingBlocks, type ReadingBlock } from "@/lib/reader-text";
 import type {
@@ -134,6 +136,7 @@ function Reader({ user, id }: { user: User; id: string }) {
   const focusEnteredAt = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveVersion = useRef(0);
   const pageRef = useRef(1);
   const modeRef = useRef<Mode>("text");
   const readyRef = useRef(false);
@@ -158,6 +161,7 @@ function Reader({ user, id }: { user: User; id: string }) {
     if (!readyRef.current || restoringRef.current) return;
     const container = scrollRef.current;
     if (!container) return;
+    const version = ++saveVersion.current;
     const ratio = Math.min(
       1,
       Math.max(
@@ -180,27 +184,23 @@ function Reader({ user, id }: { user: User; id: string }) {
         }
       }
     setSaveState("Salvando…");
-    const { error: saveError } = await supabase()
-      .from("reading_progress")
-      .upsert(
-        {
-          book_id: id,
-          owner_id: user.id,
-          page_number: pageRef.current,
-          line_index: lineIndex,
-          scroll_ratio: ratio,
-          reading_mode: modeRef.current,
-          completed: calculateReadingProgress({
-            mediaType: "pdf",
-            pageNumber: pageRef.current,
-            totalPages: pages,
-            scrollRatio: ratio,
-          }).completed,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "owner_id,book_id" },
-      );
-    setSaveState(saveError ? "Falha ao salvar" : "Salvo");
+    try {
+      await saveReadingProgress(user.id, id, {
+        page_number: pageRef.current,
+        line_index: lineIndex,
+        scroll_ratio: ratio,
+        reading_mode: modeRef.current,
+        completed: calculateReadingProgress({
+          mediaType: "pdf",
+          pageNumber: pageRef.current,
+          totalPages: pages,
+          scrollRatio: ratio,
+        }).completed,
+      });
+      if (version === saveVersion.current) setSaveState("Salvo");
+    } catch {
+      if (version === saveVersion.current) setSaveState("Falha ao salvar");
+    }
   }, [id, user.id, pages]);
 
   useEffect(() => {
@@ -534,9 +534,12 @@ function Reader({ user, id }: { user: User; id: string }) {
     const onVisibility = () => {
       if (document.visibilityState === "hidden") void save();
     };
+    const onPageHide = () => void save();
     document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", onPageHide);
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", onPageHide);
       if (saveTimer.current) clearTimeout(saveTimer.current);
       void save();
     };
@@ -731,7 +734,9 @@ function Reader({ user, id }: { user: User; id: string }) {
         <button
           className="reader-back"
           aria-label="Voltar à biblioteca"
-          onClick={() => router.push(series ? `/series/${series.id}` : "/")}
+          onClick={() => {
+            void save().finally(() => router.push(series ? `/series/${series.id}` : "/"));
+          }}
         >
           <ArrowLeft size={18} />
           <span>Biblioteca</span>
@@ -1001,7 +1006,11 @@ function Reader({ user, id }: { user: User; id: string }) {
             <span>Fim do capítulo</span>
             <div>
               {previousId ? (
-                <Link href={`/read/${previousId}`}>
+                <Link href={`/read/${previousId}`} onClick={(event) => {
+                  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                  event.preventDefault();
+                  void save().finally(() => router.push(`/read/${previousId}`));
+                }}>
                   <ChevronLeft size={17} /> Capítulo anterior
                 </Link>
               ) : (
@@ -1009,7 +1018,11 @@ function Reader({ user, id }: { user: User; id: string }) {
               )}
               <button onClick={() => setIndexOpen(true)}>Índice</button>
               {nextId ? (
-                <Link href={`/read/${nextId}`}>
+                <Link href={`/read/${nextId}`} onClick={(event) => {
+                  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                  event.preventDefault();
+                  void save().finally(() => router.push(`/read/${nextId}`));
+                }}>
                   Próximo capítulo <ChevronRight size={17} />
                 </Link>
               ) : (
@@ -1027,6 +1040,7 @@ function Reader({ user, id }: { user: User; id: string }) {
           progress={libraryProgress}
           currentId={id}
           onClose={() => setIndexOpen(false)}
+          onNavigate={(bookId) => void save().finally(() => router.push(`/read/${bookId}`))}
         />
       )}
       {bookmarksOpen && (
@@ -1037,62 +1051,6 @@ function Reader({ user, id }: { user: User; id: string }) {
           onJump={jumpToBookmark}
           onClose={() => setBookmarksOpen(false)}
         />
-      )}
-    </div>
-  );
-}
-
-function LazyPdfPage({
-  pdf,
-  page,
-  active,
-}: {
-  pdf: PDFDocumentProxy;
-  page: number;
-  active: boolean;
-}) {
-  const hostRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  useEffect(() => {
-    if (!active || !hostRef.current || !canvasRef.current) return;
-    let cancelled = false;
-    let task: { cancel: () => void; promise: Promise<unknown> } | null = null;
-    async function render() {
-      const pdfPage = await pdf.getPage(page);
-      if (cancelled || !hostRef.current || !canvasRef.current) return;
-      const base = pdfPage.getViewport({ scale: 1 });
-      const scale = Math.min(hostRef.current.clientWidth, 940) / base.width;
-      const ratio = Math.min(window.devicePixelRatio || 1, 2);
-      const viewport = pdfPage.getViewport({ scale: scale * ratio });
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      canvas.style.width = `${viewport.width / ratio}px`;
-      canvas.style.height = `${viewport.height / ratio}px`;
-      task = pdfPage.render({
-        canvas,
-        canvasContext: canvas.getContext("2d")!,
-        viewport,
-      });
-      try {
-        await task.promise;
-      } catch {
-        /* Canvas is discarded when outside the lazy window. */
-      }
-    }
-    void render();
-    return () => {
-      cancelled = true;
-      task?.cancel();
-    };
-  }, [pdf, page, active]);
-  return (
-    <div className="pdf-page" ref={hostRef}>
-      {active ? (
-        <canvas ref={canvasRef} aria-label={`Página ${page} do PDF`} />
-      ) : (
-        <div className="pdf-placeholder" />
       )}
     </div>
   );
