@@ -1,13 +1,11 @@
--- 1. Crie seu usuário em Authentication > Users no painel Supabase.
--- 2. Substitua o UUID abaixo pelo User UID dessa conta antes de executar.
--- 3. Execute este arquivo inteiro no SQL Editor do seu projeto.
+-- Historical baseline only. Apply the beta migrations before using the app.
 
 create or replace function public.is_private_owner()
 returns boolean
 language sql
 stable
 as $$
-  select (select auth.uid()) = '43caebf0-0851-4939-978d-196aa05e80f2'::uuid;
+  select false;
 $$;
 
 revoke all on function public.is_private_owner() from public;

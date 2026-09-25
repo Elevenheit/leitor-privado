@@ -7,16 +7,14 @@ create table public.beta_access (
  revoked boolean not null default false
 );
 alter table public.beta_access enable row level security;
--- Preserve the existing catalog owner, without trusting user metadata.
-insert into public.beta_access(user_id,role,expires_at)
-select id,'admin','infinity'::timestamptz from auth.users
-where id = '43caebf0-0851-4939-978d-196aa05e80f2'::uuid;
 create function public.beta_member() returns boolean language sql stable security definer set search_path = '' as $$
  select exists(select 1 from public.beta_access where user_id=auth.uid() and not revoked and expires_at>now()); $$;
 create function public.beta_admin() returns boolean language sql stable security definer set search_path = '' as $$
  select exists(select 1 from public.beta_access where user_id=auth.uid() and role='admin' and not revoked and expires_at>now()); $$;
 revoke all on function public.beta_member(), public.beta_admin() from public;
 grant execute on function public.beta_member(), public.beta_admin() to authenticated;
+create or replace function public.is_private_owner() returns boolean language sql stable security definer set search_path = '' as $$
+ select public.beta_admin(); $$;
 create policy own_access on public.beta_access for select to authenticated using(user_id=auth.uid());
 create table public.beta_invites(email text primary key check(email=lower(email)), expires_at timestamptz not null, claimed_by uuid references auth.users);
 alter table public.beta_invites enable row level security;

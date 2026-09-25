@@ -1,10 +1,11 @@
 ﻿import { PGlite } from "@electric-sql/pglite";
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 const db = new PGlite();
-const admin = "43caebf0-0851-4939-978d-196aa05e80f2",
-  a = "11111111-1111-4111-8111-111111111111",
-  b = "22222222-2222-4222-8222-222222222222";
+const admin = randomUUID(),
+  a = randomUUID(),
+  b = randomUUID();
 await db.exec(`create role authenticated; create role anon; create schema auth; create schema storage;
 create table auth.users(id uuid primary key,email text);
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
@@ -26,6 +27,8 @@ insert into public.reading_progress(book_id,owner_id,page_number) values('bbbbbb
 insert into public.reading_bookmarks(owner_id,book_id,page_number,label) values('${admin}','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',7,'Preserve me');
 insert into storage.objects(bucket_id,name) values('novels','${admin}/old.pdf');`);
 await db.exec(readFileSync("supabase/migrations/005_closed_beta.sql", "utf8"));
+assert.equal((await db.query(`select * from public.beta_access where user_id='${admin}'`)).rows.length, 0);
+await db.exec(`insert into public.beta_access(user_id,role,expires_at) values('${admin}','admin','infinity');`);
 await db.exec(
   `grant usage on schema public,auth,storage to authenticated; grant select,insert,update,delete on storage.objects to authenticated; grant execute on function auth.uid() to authenticated;`,
 );
