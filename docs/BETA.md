@@ -22,6 +22,8 @@ Antes de qualquer alteração de produção, interrompa uploads e escritas duran
 
 Veja também a [sequência documentada de migrations](MIGRATIONS.md), que distingue banco vazio de clone existente.
 
+`supabase/schema.sql` é o baseline histórico anterior ao beta, não representa sozinho o estado atual e não deve ser tratado como snapshot completo.
+
 **Banco existente no estado do main:** confirme as migrações anteriores; execute `005_closed_beta.sql` uma vez, em transação, e depois `006_visible_series_comments.sql`. Não execute novamente uma migração já aplicada. O erro aborta a transação corrente, sem aplicação parcial.
 
 **Projeto vazio de teste:**

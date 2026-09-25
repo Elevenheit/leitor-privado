@@ -18,6 +18,8 @@ npm run test:browser
 
 Use Node 24.21 (versão verificada) e preencha somente as duas variáveis públicas em `.env.local` com o projeto de teste. A aplicação exige as migrations 005 e 006; não a aponte para o banco antigo sem migrar primeiro uma cópia aprovada.
 
+`supabase/schema.sql` é somente o baseline histórico anterior ao beta, não um snapshot atual. Para banco vazio ou clone existente, siga a sequência em `docs/MIGRATIONS.md`.
+
 - [Configuração, backup, reversão e roteiro de sete dias](docs/BETA.md)
 - [Sequência de migrations](docs/MIGRATIONS.md)
 - [Resultados e limitações de cada recurso](docs/STATUS.md)

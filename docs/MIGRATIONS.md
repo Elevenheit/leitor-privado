@@ -1,6 +1,6 @@
 # Sequência de migrations PostgreSQL
 
-As migrations versionadas e os arquivos SQL de bootstrap são a referência para o estado do banco. Os scripts são executados manualmente no SQL Editor; não os reaplique a um banco que já os recebeu. Faça backup e confira `supabase/verify-preservation.sql` antes de atualizar uma cópia.
+As migrations versionadas e os arquivos SQL de bootstrap são a referência para o estado do banco. `supabase/schema.sql` é um baseline histórico pré-beta, não um snapshot atual. Os scripts são executados manualmente no SQL Editor; não os reaplique a um banco que já os recebeu. Faça backup e confira `supabase/verify-preservation.sql` antes de atualizar uma cópia.
 
 ## Projeto vazio
 

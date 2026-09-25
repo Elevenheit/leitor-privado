@@ -1,4 +1,6 @@
--- Historical baseline only. Apply the beta migrations before using the app.
+-- HISTORICAL BASELINE/BOOTSTRAP (pre-beta), not a current schema snapshot.
+-- For the current beta schema, also apply migrations 002, 004, 005, and 006;
+-- follow docs/MIGRATIONS.md and explicitly promote the initial admin.
 
 create or replace function public.is_private_owner()
 returns boolean
