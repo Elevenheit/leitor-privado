@@ -5,15 +5,8 @@ import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft,
   BookOpen,
-  Bookmark,
   ChevronLeft,
   ChevronRight,
-  List,
-  Maximize2,
-  Minus,
-  Plus,
-  Settings2,
-  Type,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
@@ -24,6 +17,7 @@ import { BookmarkPanel } from "@/components/reader/bookmark-panel";
 import { InlineIllustration } from "@/components/reader/inline-illustration";
 import { ReaderIndex } from "@/components/reader/reader-index";
 import { LazyPdfPage } from "@/components/reader/lazy-pdf-page";
+import { ReaderToolbar } from "@/components/reader/reader-toolbar";
 import {
   createReaderIllustrationExtractor,
   type ReaderIllustration,
@@ -858,170 +852,26 @@ function Reader({ user, id }: { user: User; id: string }) {
           {saveState}
         </span>
       </header>
-      <div className="reader-toolbar">
-        <div className="mode-toggle" role="group" aria-label="Modo de leitura">
-          <button
-            className={mode === "text" ? "selected" : ""}
-            aria-pressed={mode === "text"}
-            title="Leitura limpa, apenas texto"
-            onClick={() => setView("text")}
-          >
-            <Type size={15} /> Texto
-          </button>
-          <button
-            className={mode === "page" ? "selected" : ""}
-            aria-pressed={mode === "page"}
-            title="Visualização fiel às páginas do PDF"
-            onClick={() => setView("page")}
-          >
-            <BookOpen size={15} /> PDF
-          </button>
-        </div>
-        <div className="reader-quick-nav">
-          <Link
-            href={previousId ? `/read/${previousId}` : "#"}
-            aria-disabled={!previousId}
-            onClick={(event) => {
-              if (!previousId) event.preventDefault();
-            }}
-            aria-label="Capítulo anterior"
-          >
-            <ChevronLeft size={18} />
-          </Link>
-          <button aria-label="Abrir índice" onClick={() => setIndexOpen(true)}>
-            <List size={16} />
-            <span>Índice</span>
-          </button>
-          <Link
-            href={nextId ? `/read/${nextId}` : "#"}
-            aria-disabled={!nextId}
-            onClick={(event) => {
-              if (!nextId) event.preventDefault();
-            }}
-            aria-label="Próximo capítulo"
-          >
-            <ChevronRight size={18} />
-          </Link>
-        </div>
-        <div className="reader-toolbar-end">
-          <span className="reader-page-count">
-            p. {currentPage} / {pages}
-          </span>
-          <button
-            className="reader-settings-button"
-            aria-label="Marcadores"
-            title="Marcadores"
-            onClick={() => setBookmarksOpen(true)}
-          >
-            <Bookmark size={16} />
-          </button>
-          <button
-            className="reader-settings-button"
-            aria-label={focusMode ? "Sair do modo foco" : "Ativar modo foco"}
-            aria-pressed={focusMode}
-            title="Modo foco (F)"
-            onClick={toggleFocusMode}
-          >
-            <Maximize2 size={16} />
-          </button>
-          <button
-            className={`reader-settings-button ${settingsOpen ? "active" : ""}`}
-            aria-label="Ajustes de leitura"
-            aria-expanded={settingsOpen}
-            aria-controls="reader-settings"
-            onClick={() => setSettingsOpen((value) => !value)}
-          >
-            <Settings2 size={17} />
-            <span>Ajustes</span>
-          </button>
-        </div>
-        {settingsOpen && (
-          <div className="reader-settings" id="reader-settings">
-            <div className="reader-settings-title">Ajustes de leitura</div>
-            <div className="reader-controls">
-              <div className="font-tools">
-                <span>Fonte</span>
-                <div>
-                  <button
-                    aria-label="Diminuir fonte"
-                    onClick={() =>
-                      updatePrefs({ fontSize: Math.max(15, fontSize - 1) })
-                    }
-                  >
-                    <Minus size={15} />
-                  </button>
-                  <span>{fontSize}px</span>
-                  <button
-                    aria-label="Aumentar fonte"
-                    onClick={() =>
-                      updatePrefs({ fontSize: Math.min(30, fontSize + 1) })
-                    }
-                  >
-                    <Plus size={15} />
-                  </button>
-                </div>
-              </div>
-              <label className="reader-select">
-                Linha
-                <select
-                  aria-label="Altura da linha"
-                  value={lineHeight}
-                  onChange={(e) =>
-                    updatePrefs({ lineHeight: Number(e.target.value) })
-                  }
-                >
-                  <option value={1.65}>Compacta</option>
-                  <option value={1.85}>Confortável</option>
-                  <option value={2.05}>Ampla</option>
-                </select>
-              </label>
-              <label className="reader-select">
-                Largura
-                <select
-                  aria-label="Largura do texto"
-                  value={textWidth}
-                  onChange={(e) =>
-                    updatePrefs({ textWidth: Number(e.target.value) })
-                  }
-                >
-                  <option value={700}>Estreita</option>
-                  <option value={760}>Padrão</option>
-                  <option value={820}>Ampla</option>
-                </select>
-              </label>
-              <label className="reader-select">
-                Tema
-                <select
-                  aria-label="Tema do leitor"
-                  value={theme}
-                  onChange={(e) =>
-                    updatePrefs({ theme: e.target.value as Theme })
-                  }
-                >
-                  <option value="dark">Escuro</option>
-                  <option value="sepia">Sépia</option>
-                  <option value="light">Claro</option>
-                </select>
-              </label>
-              <label className="reader-select">
-                Ilustrações
-                <select
-                  aria-label="Ilustrações no modo texto"
-                  value={showIllustrations ? "show" : "hide"}
-                  onChange={(e) =>
-                    updatePrefs({
-                      showIllustrations: e.target.value === "show",
-                    })
-                  }
-                >
-                  <option value="show">Mostrar</option>
-                  <option value="hide">Ocultar</option>
-                </select>
-              </label>
-            </div>
-          </div>
-        )}
-      </div>
+      <ReaderToolbar
+        mode={mode}
+        setView={setView}
+        previousId={previousId}
+        nextId={nextId}
+        setIndexOpen={setIndexOpen}
+        currentPage={currentPage}
+        pages={pages}
+        setBookmarksOpen={setBookmarksOpen}
+        focusMode={focusMode}
+        toggleFocusMode={toggleFocusMode}
+        settingsOpen={settingsOpen}
+        setSettingsOpen={setSettingsOpen}
+        fontSize={fontSize}
+        lineHeight={lineHeight}
+        textWidth={textWidth}
+        theme={theme}
+        showIllustrations={showIllustrations}
+        updatePrefs={updatePrefs}
+      />
       <div className="reader-scroll" ref={scrollRef} onScroll={onScroll}>
         <div
           className={`continuous-document ${mode === "text" ? "text-document" : "pdf-document"}`}
