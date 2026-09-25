@@ -29,6 +29,7 @@ insert into storage.objects(bucket_id,name) values('novels','${admin}/old.pdf');
 await db.exec(readFileSync("supabase/migrations/005_closed_beta.sql", "utf8"));
 assert.equal((await db.query(`select * from public.beta_access where user_id='${admin}'`)).rows.length, 0);
 await db.exec(`insert into public.beta_access(user_id,role,expires_at) values('${admin}','admin','infinity');`);
+await db.exec(readFileSync("supabase/migrations/006_visible_series_comments.sql", "utf8"));
 await db.exec(
   `grant usage on schema public,auth,storage to authenticated; grant select,insert,update,delete on storage.objects to authenticated; grant execute on function auth.uid() to authenticated;`,
 );
@@ -57,6 +58,11 @@ assert.equal(
 );
 assert.equal((await as(admin, "select * from favorites")).rows.length, 1);
 assert.equal((await as(a, "select * from books")).rows.length, 0);
+await db.exec(`insert into public.series(id,owner_id,title,beta_visible) values('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee','${admin}','Hidden series',false);
+insert into public.comments(id,series_id,owner_id,body) values('ffffffff-ffff-4fff-8fff-ffffffffffff','eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee','${admin}','Private moderation note')`);
+assert.equal((await as(a, `select * from comments where series_id='eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'`)).rows.length, 0);
+await assert.rejects(as(a, `insert into comments(series_id,owner_id,body) values('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee','${a}','Attempt')`));
+await assert.rejects(as(a, `insert into comment_reports(comment_id,owner_id,reason) values('ffffffff-ffff-4fff-8fff-ffffffffffff','${a}','Hidden comment')`));
 await as(
   admin,
   `update series set beta_visible=true,rights_note='Original test fixture, authorized'`,
@@ -134,7 +140,7 @@ await as(
   admin,
   `delete from comments where id='cccccccc-cccc-4ccc-8ccc-cccccccccccc'`,
 );
-assert.equal((await as(a, "select * from comments")).rows.length, 0);
+assert.equal((await as(a, `select * from comments where id='cccccccc-cccc-4ccc-8ccc-cccccccccccc'`)).rows.length, 0);
 await db.exec(
   `update beta_access set expires_at=now()-interval '1 second' where user_id='${b}'`,
 );

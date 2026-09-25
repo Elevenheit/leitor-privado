@@ -20,19 +20,23 @@ Antes de qualquer alteração de produção, interrompa uploads e escritas duran
 
 ## 2. Ordem SQL
 
-**Banco existente no estado do main:** confirme as migrações anteriores; execute apenas `005_closed_beta.sql`, uma vez, em transação. A 005 não deve ser executada novamente depois de aplicada. O erro aborta a transação, sem aplicação parcial.
+Veja também a [sequência documentada de migrations](MIGRATIONS.md), que distingue banco vazio de clone existente.
+
+**Banco existente no estado do main:** confirme as migrações anteriores; execute `005_closed_beta.sql` uma vez, em transação, e depois `006_visible_series_comments.sql`. Não execute novamente uma migração já aplicada. O erro aborta a transação corrente, sem aplicação parcial.
 
 **Projeto vazio de teste:**
 
-1. Antes da migração, crie uma conta administradora no painel Auth, sem enviar convite por e-mail. Use senha temporária forte. Descubra seu UUID.
-2. Ajuste o UUID de proprietário em uma cópia privada de `supabase/schema.sql` e na inserção administrativa da 005 para esse UUID. Não use o UUID do dono da produção em um projeto vazio.
+1. Antes da migração, crie uma conta administradora no painel Auth, sem enviar convite por e-mail. Use senha temporária forte.
+2. Depois de executar a migration 005, promova explicitamente essa conta conforme [o procedimento de bootstrap administrativo](ADMIN-BOOTSTRAP.md). A migration não escolhe uma identidade administrativa.
 3. Execute `supabase/schema.sql`.
 4. Execute `supabase/migrations/002_library_structure.sql`.
 5. Execute `supabase/migrations/004_reader_productivity.sql` (não há arquivo 003 no repositório).
-6. Execute a cópia revisada de `supabase/migrations/005_closed_beta.sql`.
-7. Execute novamente `supabase/verify-preservation.sql`. Compare contagens, caminhos, progresso e marcadores com a captura anterior. Confira a cópia dos favoritos antigos na tabela `favorites`.
+6. Execute `supabase/migrations/005_closed_beta.sql`.
+7. Promova a conta administrativa conforme `docs/ADMIN-BOOTSTRAP.md`.
+8. Execute `supabase/migrations/006_visible_series_comments.sql`.
+9. Execute novamente `supabase/verify-preservation.sql`. Compare contagens, caminhos, progresso e marcadores com a captura anterior. Confira a cópia dos favoritos antigos na tabela `favorites`.
 
-A 005 preserva `owner_id` como autoria do catálogo e os caminhos existentes. Converte a chave do progresso para `(owner_id, book_id)`, copia favoritos e substitui as policies antigas. A função `is_private_owner()` fica legada, sem uso nas novas policies. O catálogo é administrado por `beta_access.role`, nunca por user metadata. Perfis privados e uma view limitada de identidade impedem expor bio/preferências/email aos outros usuários. Uma conta pode consultar apenas suas próprias permissões e não pode atribuir a si mesma papel administrativo.
+A 005 preserva `owner_id` como autoria do catálogo e os caminhos existentes. Converte a chave do progresso para `(owner_id, book_id)`, copia favoritos e substitui as policies antigas. A função `is_private_owner()` fica legada, sem uso nas novas policies. O catálogo é administrado por `beta_access.role`, nunca por user metadata. Perfis privados e uma view limitada de identidade impedem expor bio/preferências/email aos outros usuários. Uma conta pode consultar apenas suas próprias permissões e não pode atribuir a si mesma papel administrativo. A 006 restringe leitura e colaboração em comentários a obras liberadas; execute-a depois da 005 em bancos já migrados.
 
 As policies de Storage removidas são as antigas com prefixo `Owner `; revise policies adicionais personalizadas antes de aplicar. O teste local cobre somente as policies versionadas. Buckets permanecem privados. URLs assinadas duram uma hora: revogar acesso impede novas URLs, mas não cancela imediatamente URLs já emitidas nem arquivos já baixados.
 
