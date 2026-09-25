@@ -15,7 +15,7 @@ import {
   Settings2,
   Type,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 import type { User } from "@supabase/supabase-js";
 import { AuthGate } from "@/components/auth-gate";
@@ -118,6 +118,7 @@ function Reader({ user, id }: { user: User; id: string }) {
   );
   const [loadingPages, setLoadingPages] = useState<Set<number>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
+  const [pageHeights, setPageHeights] = useState<Record<number, number>>({});
   const [loading, setLoading] = useState(true);
   const [urlGeneration, setUrlGeneration] = useState(0);
   const [error, setError] = useState("");
@@ -144,6 +145,7 @@ function Reader({ user, id }: { user: User; id: string }) {
   const readyRef = useRef(false);
   const restoringRef = useRef<Position | null>(null);
   const loadingRef = useRef(new Set<number>());
+  const retainedPagesRef = useRef(new Set<number>());
 
   const orderedPages = useMemo(
     () => Array.from({ length: pages }, (_, i) => i + 1),
@@ -158,6 +160,29 @@ function Reader({ user, id }: { user: User; id: string }) {
     () => () => illustrationExtractor?.dispose(),
     [illustrationExtractor],
   );
+
+  useLayoutEffect(() => {
+    if (mode !== "text") return;
+    const root = scrollRef.current;
+    if (!root) return;
+    const measurements: Record<number, number> = {};
+    for (const element of root.querySelectorAll<HTMLElement>("[data-page-segment]")) {
+      const page = Number(element.dataset.pageSegment);
+      if (textByPage[page] !== undefined && element.offsetHeight > 0)
+        measurements[page] = element.offsetHeight;
+    }
+    setPageHeights((previous) => {
+      let changed = false;
+      const next = { ...previous };
+      for (const [page, height] of Object.entries(measurements)) {
+        if (next[Number(page)] !== height) {
+          next[Number(page)] = height;
+          changed = true;
+        }
+      }
+      return changed ? next : previous;
+    });
+  }, [mode, textByPage, illustrationsByPage, illustrationStatus]);
 
   const save = useCallback(async () => {
     if (!readyRef.current || restoringRef.current) return;
@@ -446,6 +471,26 @@ function Reader({ user, id }: { user: User; id: string }) {
     return () => observer.disconnect();
   }, [pages, loading]);
 
+  useEffect(() => {
+    const retained = new Set(activePages);
+    for (let page = Math.max(1, currentPage - 10); page <= Math.min(pages, currentPage + 10); page++)
+      retained.add(page);
+    retainedPagesRef.current = retained;
+    const prune = <T,>(previous: Record<number, T>) => {
+      const entries = Object.entries(previous).filter(([page]) => retained.has(Number(page)));
+      return entries.length === Object.keys(previous).length
+        ? previous
+        : Object.fromEntries(entries) as Record<number, T>;
+    };
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setTextByPage(prune);
+    setIllustrationsByPage(prune);
+    setIllustrationStatus(prune);
+    setLoadingPages((previous) => new Set([...previous].filter((page) => retained.has(page))));
+    for (const page of Object.keys(illustrationStatus).map(Number))
+      if (!retained.has(page)) illustrationExtractor?.release(page);
+  }, [activePages, currentPage, illustrationExtractor, illustrationStatus, pages]);
+
   const loadPageText = useCallback(
     async (pageNo: number) => {
       if (
@@ -460,7 +505,8 @@ function Reader({ user, id }: { user: User; id: string }) {
         const pdfPage = await pdf.getPage(pageNo);
         const content = await pdfPage.getTextContent();
         const blocks = extractReadingBlocks(content.items, pdfPage.view);
-        setTextByPage((previous) => ({ ...previous, [pageNo]: blocks }));
+        if (retainedPagesRef.current.has(pageNo))
+          setTextByPage((previous) => ({ ...previous, [pageNo]: blocks }));
       } catch (cause) {
         setError(
           cause instanceof Error ? cause.message : "Falha ao extrair texto.",
@@ -505,17 +551,18 @@ function Reader({ user, id }: { user: User; id: string }) {
       void illustrationExtractor
         .get(pageNo, hasReadableText)
         .then((images) => {
-          if (images.length)
+          if (images.length && retainedPagesRef.current.has(pageNo))
             setIllustrationsByPage((previous) => ({
               ...previous,
               [pageNo]: images,
             }));
         })
         .finally(() => {
-          setIllustrationStatus((previous) => ({
-            ...previous,
-            [pageNo]: "complete",
-          }));
+          if (retainedPagesRef.current.has(pageNo))
+            setIllustrationStatus((previous) => ({
+              ...previous,
+              [pageNo]: "complete",
+            }));
         });
     }
   }, [
@@ -968,6 +1015,9 @@ function Reader({ user, id }: { user: User; id: string }) {
               className={`document-segment ${mode === "text" ? "text-segment" : "pdf-segment"}`}
               key={pageNo}
               data-page-segment={pageNo}
+              style={mode === "text" && textByPage[pageNo] === undefined && pageHeights[pageNo]
+                ? { minHeight: `${pageHeights[pageNo]}px` }
+                : undefined}
             >
               {mode === "text" ? (
                 textByPage[pageNo] !== undefined ? (

@@ -18,6 +18,7 @@ export function LazyPdfPage({
     if (!active || !hostRef.current || !canvasRef.current) return;
     let cancelled = false;
     let task: { cancel: () => void; promise: Promise<unknown> } | null = null;
+    const canvas = canvasRef.current;
     async function render() {
       const pdfPage = await pdf.getPage(page);
       if (cancelled || !hostRef.current || !canvasRef.current) return;
@@ -46,6 +47,10 @@ export function LazyPdfPage({
     return () => {
       cancelled = true;
       task?.cancel();
+      if (canvas) {
+        canvas.width = 0;
+        canvas.height = 0;
+      }
     };
   }, [pdf, page, active]);
   return (

@@ -206,6 +206,7 @@ export function createReaderIllustrationExtractor(pdf: PDFDocumentProxy) {
   const cache = new Map<number, Promise<ReaderIllustration[]>>();
   const fingerprints = new Set<string>();
   const urls = new Set<string>();
+  const pageFingerprints = new Map<number, string[]>();
   let disposed = false;
 
   async function extract(pageNumber: number, hasReadableText: boolean): Promise<ReaderIllustration[]> {
@@ -233,6 +234,9 @@ export function createReaderIllustrationExtractor(pdf: PDFDocumentProxy) {
         if (!blob || disposed) { fingerprints.delete(signature); continue; }
         const src = URL.createObjectURL(blob);
         urls.add(src);
+        const signatures = pageFingerprints.get(pageNumber) || [];
+        signatures.push(signature);
+        pageFingerprints.set(pageNumber, signatures);
         illustrations.push({ src, page: pageNumber, width: source.width, height: source.height, ...illustrationPlacement(candidate.bounds, page.view) });
       }
       return illustrations;
@@ -248,10 +252,25 @@ export function createReaderIllustrationExtractor(pdf: PDFDocumentProxy) {
       cache.set(pageNumber, pending);
       return pending;
     },
+    release(pageNumber: number) {
+      const pending = cache.get(pageNumber);
+      cache.delete(pageNumber);
+      if (!pending) return;
+      void pending.then((illustrations) => {
+        if (cache.get(pageNumber) === pending) return;
+        for (const illustration of illustrations) {
+          URL.revokeObjectURL(illustration.src);
+          urls.delete(illustration.src);
+        }
+        for (const signature of pageFingerprints.get(pageNumber) || [])
+          fingerprints.delete(signature);
+        pageFingerprints.delete(pageNumber);
+      });
+    },
     dispose() {
       disposed = true;
       for (const src of urls) URL.revokeObjectURL(src);
-      urls.clear(); cache.clear(); fingerprints.clear();
+      urls.clear(); cache.clear(); fingerprints.clear(); pageFingerprints.clear();
     },
   };
 }
