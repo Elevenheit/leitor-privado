@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { AuthGate } from "@/components/auth-gate";
 import { Nav } from "@/components/nav";
 import { supabase } from "@/lib/supabase";
+import { replaceStorageReference } from "@/lib/data/uploads";
+import { toDataError } from "@/lib/data/errors";
 export default function Page() {
   return <AuthGate>{(u) => <Profile id={u.id} />}</AuthGate>;
 }
@@ -95,7 +97,6 @@ function Profile({ id }: { id: string }) {
       return;
     }
     setBusy(true);
-    let path = "";
     try {
       const bitmap = await createImageBitmap(file);
       const valid =
@@ -107,32 +108,32 @@ function Profile({ id }: { id: string }) {
         throw Error(
           "Use uma imagem de até 4096 pixels por lado e 8 megapixels.",
         );
-      path = `${id}/${crypto.randomUUID()}.${file.type === "image/jpeg" ? "jpg" : file.type.split("/")[1]}`;
       const api = supabase();
-      const uploaded = await api.storage
-        .from("profiles")
-        .upload(path, file, { contentType: file.type });
-      if (uploaded.error) throw uploaded.error;
-      const result = await api
-        .from("profiles")
-        .update({ [field]: path })
-        .eq("id", id);
-      if (result.error) {
-        await api.storage.from("profiles").remove([path]);
-        throw result.error;
-      }
+      const current = await api.from("profiles").select(field).eq("id", id).single();
+      if (current.error) throw current.error;
+      const oldPath = (current.data as Record<typeof field, string | null>)[field];
+      const path = `${id}/${crypto.randomUUID()}.${file.type === "image/jpeg" ? "jpg" : file.type.split("/")[1]}`;
+      const result = await replaceStorageReference("profiles", path, file, file.type, async (newPath) => {
+        const updated = await api.from("profiles").update({ [field]: newPath }).eq("id", id).select("id").single();
+        if (updated.error) throw updated.error;
+      }, async (newPath) => {
+        const current = await api.from("profiles").select(field).eq("id", id).maybeSingle();
+        if (current.error) throw current.error;
+        return Boolean(current.data && (current.data as Record<typeof field, string | null>)[field] === newPath);
+      }, oldPath);
       const signed = await api.storage
         .from("profiles")
         .createSignedUrl(path, 3600);
-      if (signed.error) throw signed.error;
+      if (signed.error) {
+        setMessage("A imagem foi salva, mas não foi possível preparar a prévia. Recarregue o perfil.");
+        return;
+      }
       (field === "avatar_path" ? setAvatarUrl : setBannerUrl)(
         signed.data.signedUrl,
       );
-      setMessage("Imagem salva.");
-    } catch {
-      setMessage(
-        "Não foi possível salvar a imagem. Confira o formato, tamanho e conexão.",
-      );
+      setMessage(result.cleanupWarning || "Imagem salva.");
+    } catch (cause) {
+      setMessage(toDataError(cause, "Não foi possível salvar a imagem.").message);
     } finally {
       setBusy(false);
     }

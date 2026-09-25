@@ -17,14 +17,14 @@ import {
   UploadCloud,
   X,
 } from "lucide-react";
-import { Upload } from "tus-js-client";
 import type { User } from "@supabase/supabase-js";
 import { BetaAccess } from "@/components/beta-access";
 import { AuthGate } from "@/components/auth-gate";
 import { BatchUploadModal } from "@/components/library/batch-upload-modal";
 import { ConfirmDialog } from "@/components/modals/confirm-dialog";
 import { Nav } from "@/components/nav";
-import { BUCKET, supabase } from "@/lib/supabase";
+import { supabase } from "@/lib/supabase";
+import { deleteBookAndFile, deleteSeriesAndMedia, replaceStorageReference, uploadAndRegisterBook } from "@/lib/data/uploads";
 import {
   formatSize,
   type Book,
@@ -181,22 +181,17 @@ function Dashboard({ user }: { user: User }) {
             ? "jpg"
             : coverFile.type.split("/")[1];
         const path = `${user.id}/${created.id}/${crypto.randomUUID()}.${ext}`;
-        const { error: uploadError } = await supabase()
-          .storage.from("covers")
-          .upload(path, coverFile, {
-            contentType: coverFile.type,
-            upsert: false,
+        try {
+          await replaceStorageReference("covers", path, coverFile, coverFile.type, async (coverPath) => {
+            const linked = await supabase().from("series").update({ cover_path: coverPath }).eq("id", created.id).select("id").single();
+            if (linked.error) throw linked.error;
+          }, async (coverPath) => {
+            const current = await supabase().from("series").select("cover_path").eq("id", created.id).maybeSingle();
+            if (current.error) throw current.error;
+            return current.data?.cover_path === coverPath;
           });
-        if (uploadError)
-          setError(
-            `Obra criada, mas a capa não foi enviada: ${uploadError.message}`,
-          );
-        else {
-          const { error: coverError } = await supabase()
-            .from("series")
-            .update({ cover_path: path })
-            .eq("id", created.id);
-          if (coverError) setError(coverError.message);
+        } catch (cause) {
+          setError(`Obra criada, mas a capa não foi vinculada: ${cause instanceof Error ? cause.message : "falha no Storage ou no catálogo."}`);
         }
       }
       setNewTitle("");
@@ -310,13 +305,13 @@ function Dashboard({ user }: { user: User }) {
 
   async function removeSeries(item: Series) {
     setBusy(true);
-    const { error: deleteError } = await supabase()
-      .from("series")
-      .delete()
-      .eq("id", item.id)
-      .eq("owner_id", user.id);
-    if (deleteError) setError(deleteError.message);
-    else setDeleteTarget(null);
+    setError("");
+    try {
+      await deleteSeriesAndMedia(user.id, item);
+      setDeleteTarget(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Não foi possível excluir a obra.");
+    }
     await load();
     setBusy(false);
   }
@@ -345,52 +340,12 @@ function Dashboard({ user }: { user: User }) {
       if (mediaType === "video" && extension === "mp4" && new TextDecoder().decode(bytes.slice(4, 8)) !== "ftyp") { setError("MP4 inválido."); return; }
       if (mediaType === "video" && extension === "webm" && !(bytes[0] === 26 && bytes[1] === 69 && bytes[2] === 223 && bytes[3] === 163)) { setError("WebM inválido."); return; }
     }
-    const api = supabase();
-    const {
-      data: { session },
-    } = await api.auth.getSession();
-    if (!session) {
-      setError("Sua sessão expirou. Entre novamente.");
-      return;
-    }
     const path = `${user.id}/${selectedSeries}/${selectedVolume || "unassigned"}/${crypto.randomUUID()}.${extension}`;
-    const endpoint = `${process.env.NEXT_PUBLIC_SUPABASE_URL!.replace(/\/$/, "")}/storage/v1/upload/resumable`;
     setUploading(true);
     setUploadPercent(0);
     try {
-      if (mediaType === "pdf") await new Promise<void>((resolve, reject) => {
-        const upload = new Upload(file, {
-          endpoint,
-          headers: { authorization: `Bearer ${session.access_token}` },
-          retryDelays: [0, 3000, 5000, 10000, 20000],
-          chunkSize: 6 * 1024 * 1024,
-          uploadDataDuringCreation: true,
-          removeFingerprintOnSuccess: true,
-          metadata: {
-            bucketName: BUCKET,
-            objectName: path,
-            contentType: "application/pdf",
-            cacheControl: "3600",
-          },
-          onError: reject,
-          onSuccess: () => resolve(),
-          onProgress: (sent, total) =>
-            setUploadPercent(Math.round((sent / total) * 100)),
-        });
-        upload
-          .findPreviousUploads()
-          .then((previous) => {
-            if (previous.length) upload.resumeFromPreviousUpload(previous[0]);
-            upload.start();
-          })
-          .catch(reject);
-      });
-      else {
-        const objectType = mediaType === "cbz" ? "application/zip" : extension === "mp4" ? "video/mp4" : "video/webm";
-        const uploaded = await api.storage.from(BUCKET).upload(path, file, { contentType: objectType });
-        if (uploaded.error) throw uploaded.error;
-      }
-      const { error: insertError } = await api.from("books").insert({
+      const objectType = mediaType === "pdf" ? "application/pdf" : mediaType === "cbz" ? "application/zip" : extension === "mp4" ? "video/mp4" : "video/webm";
+      await uploadAndRegisterBook({
         owner_id: user.id,
         title:
           chapterTitle.trim() ||
@@ -412,11 +367,7 @@ function Dashboard({ user }: { user: User }) {
         media_type: mediaType,
         skip_intro: mediaType === "video" && skipIntro,
         intro_end: introEnd,
-      });
-      if (insertError) {
-        await api.storage.from(BUCKET).remove([path]);
-        throw insertError;
-      }
+      }, file, objectType, { resumable: mediaType === "pdf", onProgress: setUploadPercent });
       setFile(null);
       setChapterNumber("");
       setChapterTitle("");
@@ -437,25 +388,12 @@ function Dashboard({ user }: { user: User }) {
   async function removeBook(book: Book) {
     setBusy(true);
     setError("");
-    const api = supabase();
-    const { error: storageError } = await api.storage
-      .from(BUCKET)
-      .remove([book.file_path]);
-    if (storageError) {
-      setError(storageError.message);
-      setBusy(false);
-      return;
+    try {
+      await deleteBookAndFile(user.id, book);
+      setDeleteTarget(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Não foi possível excluir o arquivo.");
     }
-    const { error: dbError } = await api
-      .from("books")
-      .delete()
-      .eq("id", book.id)
-      .eq("owner_id", user.id);
-    if (dbError)
-      setError(
-        `PDF excluído, mas o registro não foi removido: ${dbError.message}`,
-      );
-    else setDeleteTarget(null);
     await load();
     setBusy(false);
   }

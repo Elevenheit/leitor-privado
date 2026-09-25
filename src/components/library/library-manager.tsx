@@ -7,8 +7,12 @@ import type { User } from "@supabase/supabase-js";
 import { ConfirmDialog } from "@/components/modals/confirm-dialog";
 import { Nav } from "@/components/nav";
 import { sortBooks } from "@/lib/reader-navigation";
-import { BUCKET, supabase } from "@/lib/supabase";
+import { supabase } from "@/lib/supabase";
 import type { Book, Series, Volume } from "@/lib/types";
+import { listAdminCatalog } from "@/lib/data/admin";
+import { deleteBookAndFile } from "@/lib/data/uploads";
+import { toDataError } from "@/lib/data/errors";
+import { LibraryBookRow } from "./library-book-row";
 
 type Action = "move" | "type" | "order" | "delete";
 const PAGE_SIZE = 50;
@@ -32,16 +36,11 @@ export function LibraryManager({ user }: { user: User }) {
   const [message, setMessage] = useState("");
 
   const load = useCallback(async () => {
-    const api = supabase();
-    const [b, s, v] = await Promise.all([
-      api.from("books").select("*").eq("owner_id", user.id),
-      api.from("series").select("*").eq("owner_id", user.id).order("title"),
-      api.from("volumes").select("*").eq("owner_id", user.id),
-    ]);
-    const failure = b.error || s.error || v.error;
-    if (failure) setError(failure.message);
-    else { setBooks((b.data || []) as Book[]); setSeries((s.data || []) as Series[]); setVolumes((v.data || []) as Volume[]); }
-    setLoading(false);
+    try {
+      const data = await listAdminCatalog(user.id);
+      setBooks(data.books as Book[]); setSeries(data.series as Series[]); setVolumes(data.volumes as Volume[]); setError("");
+    } catch (cause) { setError(toDataError(cause, "Não foi possível carregar o acervo.").message); }
+    finally { setLoading(false); }
   }, [user.id]);
 
   // Load once for this management view; mutations refresh the local list.
@@ -92,22 +91,19 @@ export function LibraryManager({ user }: { user: User }) {
   async function removeSelected() {
     setBusy(true); setError(""); setMessage("");
     const failures: string[] = [];
-    const api = supabase();
     for (const book of chosen) {
-      const { error: storageError } = await api.storage.from(BUCKET).remove([book.file_path]);
-      if (storageError) { failures.push(`${book.title}: ${storageError.message}`); continue; }
-      const { error: deleteError } = await api.from("books").delete().eq("id", book.id).eq("owner_id", user.id);
-      if (deleteError) failures.push(`${book.title}: PDF removido, mas registro não excluído: ${deleteError.message}`);
+      try { await deleteBookAndFile(user.id, book); }
+      catch (cause) { failures.push(`${book.title}: ${toDataError(cause, "Delete failed.").message}`); }
     }
-    if (failures.length) setError(failures.join(" · "));
-    else setMessage(`${chosen.length} PDF(s) excluídos.`);
+    if (failures.length) setError(failures.join(" | "));
+    else setMessage(`${chosen.length} PDF(s) excluidos.`);
     setDeleteOpen(false); setSelected(new Set()); setPage(0); await load(); setBusy(false);
   }
 
   return <><Nav back/><main className="manager-page"><Link href="/" className="back-link"><ArrowLeft size={16}/> Biblioteca</Link><header className="manager-heading"><div><span className="eyebrow">Organização do acervo</span><h1>Gerenciar biblioteca</h1><p>Selecione PDFs para alterar a organização, tipo ou ordem.</p></div></header>
     {error && <div className="error" role="alert">{error}</div>}{message && <div className="manager-message" role="status"><Check size={15}/>{message}</div>}
     <div className="manager-tools"><div className="search"><Search size={17}/><input aria-label="Buscar PDFs" placeholder="Buscar PDFs, arquivos ou obras…" value={query} onChange={event => { setQuery(event.target.value); setPage(0); }}/></div><span>{books.length} PDFs</span></div>
-    <div className="manager-layout"><section className="manager-list"><div className="manager-list-head"><button onClick={selectVisible} disabled={!visible.length}>Selecionar página</button><button onClick={() => setSelected(new Set())} disabled={!selected.size}>Limpar seleção</button><span>{selected.size} selecionados</span></div>{loading ? <p className="manager-empty">Carregando biblioteca…</p> : visible.length ? visible.map(book => <label className="manager-row" key={book.id}><input type="checkbox" checked={selected.has(book.id)} onChange={() => toggle(book.id)}/><span><strong>{book.chapter_title || book.title}</strong><small>{series.find(item => item.id === book.series_id)?.title || "Sem coleção"} · {volumes.find(item => item.id === book.volume_id)?.title || (book.volume_id ? `Volume ${volumes.find(item => item.id === book.volume_id)?.volume_number ?? ""}` : "Sem volume")} · ordem {book.sort_order}</small></span></label>) : <p className="manager-empty">Nenhum PDF encontrado.</p>}{filtered.length > PAGE_SIZE && <div className="manager-pagination"><button disabled={page === 0} onClick={() => setPage(value => value - 1)}>Anterior</button><span>{page + 1} / {Math.ceil(filtered.length / PAGE_SIZE)}</span><button disabled={(page + 1) * PAGE_SIZE >= filtered.length} onClick={() => setPage(value => value + 1)}>Próxima</button></div>}</section>
+    <div className="manager-layout"><section className="manager-list"><div className="manager-list-head"><button onClick={selectVisible} disabled={!visible.length}>Selecionar página</button><button onClick={() => setSelected(new Set())} disabled={!selected.size}>Limpar seleção</button><span>{selected.size} selecionados</span></div>{loading ? <p className="manager-empty">Carregando biblioteca…</p> : visible.length ? visible.map(book => <LibraryBookRow key={book.id} book={book} selected={selected.has(book.id)} seriesTitle={series.find(item => item.id === book.series_id)?.title || "Sem colecao"} volumeLabel={volumes.find(item => item.id === book.volume_id)?.title || (book.volume_id ? `Volume ${volumes.find(item => item.id === book.volume_id)?.volume_number ?? ""}` : "Sem volume")} onToggle={() => toggle(book.id)} />) : <p className="manager-empty">Nenhum PDF encontrado.</p>}{filtered.length > PAGE_SIZE && <div className="manager-pagination"><button disabled={page === 0} onClick={() => setPage(value => value - 1)}>Anterior</button><span>{page + 1} / {Math.ceil(filtered.length / PAGE_SIZE)}</span><button disabled={(page + 1) * PAGE_SIZE >= filtered.length} onClick={() => setPage(value => value + 1)}>Próxima</button></div>}</section>
       <aside className="manager-actions"><h2>Ação em massa</h2><label>Ação<select value={action} onChange={event => setAction(event.target.value as Action)}><option value="move">Mover para obra / volume</option><option value="type">Alterar tipo</option><option value="order">Alterar ordem</option><option value="delete">Excluir PDFs</option></select></label>{action === "move" && <><label>Obra<select value={targetSeries} onChange={event => { setTargetSeries(event.target.value); setTargetVolume(""); }}><option value="">Sem coleção</option>{series.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label><label>Volume<select value={targetVolume} onChange={event => setTargetVolume(event.target.value)} disabled={!targetSeries}><option value="">Sem volume</option>{volumeOptions.map(item => <option key={item.id} value={item.id}>{item.volume_number !== null ? `Volume ${item.volume_number}` : item.title || "Volume"}</option>)}</select></label><p>O arquivo e o progresso de leitura permanecem no lugar.</p></>}{action === "type" && <label>Tipo<select value={targetType} onChange={event => setTargetType(event.target.value as "chapter" | "volume")}><option value="chapter">Capítulo</option><option value="volume">Volume completo</option></select></label>}{action === "order" && <><label>Ordem inicial<input type="number" min="0" step="1" value={orderStart} onChange={event => setOrderStart(event.target.value)}/></label><p>Os PDFs selecionados recebem ordens sequenciais, com intervalo de 1000, na ordem exibida.</p></>}{action === "delete" && <p>Os arquivos selecionados e seus registros serão excluídos permanentemente.</p>}<button className={action === "delete" ? "danger-button" : "primary-button"} disabled={!selected.size || busy} onClick={() => action === "delete" ? setDeleteOpen(true) : void apply()}>{busy ? "Aplicando…" : action === "delete" ? <><Trash2 size={15}/> Excluir selecionados</> : `Aplicar a ${selected.size} PDF${selected.size === 1 ? "" : "s"}`}</button></aside></div>
     {deleteOpen && <ConfirmDialog title={`Excluir ${chosen.length} PDF${chosen.length === 1 ? "" : "s"}?`} message="Esta ação remove os arquivos e seus registros, incluindo o progresso. Não é possível desfazer." confirmLabel="Excluir PDFs" busy={busy} onCancel={() => setDeleteOpen(false)} onConfirm={() => void removeSelected()}/>}
   </main></>;

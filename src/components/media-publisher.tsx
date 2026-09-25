@@ -1,8 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
-import { supabase, BUCKET } from "@/lib/supabase";
+import { supabase } from "@/lib/supabase";
 import { formats, type Format } from "@/lib/catalog";
 import type { Book, Series } from "@/lib/types";
+import { uploadAndRegisterBook } from "@/lib/data/uploads";
 export function MediaPublisher({ userId }: { userId: string }) {
   const [series, setSeries] = useState<Series[]>([]);
   const [seriesId, setSeriesId] = useState("");
@@ -47,7 +48,6 @@ export function MediaPublisher({ userId }: { userId: string }) {
     if (busy || !seriesId || !file) return;
     setBusy(true);
     setMessage("Enviando mídia…");
-    let uploaded = "";
     try {
       const api = supabase();
       const type = format === "anime" ? "video" : "cbz";
@@ -119,12 +119,7 @@ export function MediaPublisher({ userId }: { userId: string }) {
         }
       }
       const path = `${userId}/${seriesId}/${crypto.randomUUID()}.${extension}`;
-      const r = await api.storage.from(BUCKET).upload(path, file, {
-        contentType: type === "cbz" ? "application/zip" : `video/${extension}`,
-      });
-      if (r.error) throw r.error;
-      uploaded = path;
-      const row = await api.from("books").insert({
+      await uploadAndRegisterBook({
         owner_id: userId,
         series_id: seriesId,
         volume_id: volumeId,
@@ -138,21 +133,15 @@ export function MediaPublisher({ userId }: { userId: string }) {
         media_type: type,
         skip_intro: type === "video" && skip,
         intro_end: end,
-      });
-      if (row.error) throw row.error;
-      uploaded = "";
+        content_type: "chapter",
+      }, file, type === "cbz" ? "application/zip" : `video/${extension}`);
       setMessage("Mídia publicada. Abra a obra para conferir a reprodução.");
       setFile(null);
     } catch (e) {
-      let cleanup = "";
-      if (uploaded) {
-        const r = await supabase().storage.from(BUCKET).remove([uploaded]);
-        if (r.error) cleanup = ` Limpeza pendente no Storage: ${uploaded}`;
-      }
       setMessage(
         (e instanceof Error
           ? e.message
-          : "Falha no envio; confira a conexão.") + cleanup,
+          : "Falha no envio; confira a conexão."),
       );
     } finally {
       setBusy(false);
