@@ -37,7 +37,8 @@ Veja também a [sequência documentada de migrations](MIGRATIONS.md), que distin
 7. Promova a conta administrativa conforme `docs/ADMIN-BOOTSTRAP.md`.
 8. Execute `supabase/migrations/006_visible_series_comments.sql`.
 9. Execute `supabase/migrations/007_storage_visibility.sql`.
-10. Execute novamente `supabase/verify-preservation.sql`. Compare contagens, caminhos, progresso e marcadores com a captura anterior. Confira a cópia dos favoritos antigos na tabela `favorites`.
+10. Execute `supabase/migrations/008_nonnegative_catalog_numbers.sql`, `009_reader_navigation.sql` e `010_comment_report_rate_limit.sql`.
+11. Execute novamente `supabase/verify-preservation.sql`. Compare contagens, caminhos, progresso e marcadores com a captura anterior. Confira a cópia dos favoritos antigos na tabela `favorites`.
 
 A 005 preserva `owner_id` como autoria do catálogo e os caminhos existentes. Converte a chave do progresso para `(owner_id, book_id)`, copia favoritos e substitui as policies antigas. A função `is_private_owner()` fica legada, sem uso nas novas policies. O catálogo é administrado por `beta_access.role`, nunca por user metadata. Perfis privados e uma view limitada de identidade impedem expor bio/preferências/email aos outros usuários. Uma conta pode consultar apenas suas próprias permissões e não pode atribuir a si mesma papel administrativo. A 006 restringe leitura e colaboração em comentários a obras liberadas. A 007 restringe leitura do Storage a arquivos referenciados por obras publicadas e a buckets privados.
 

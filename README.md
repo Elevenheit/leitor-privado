@@ -16,7 +16,7 @@ npx playwright install chromium
 npm run test:browser
 ```
 
-Use Node 24.21 (versão verificada) e preencha somente as duas variáveis públicas em `.env.local` com o projeto de teste. A aplicação exige as migrations 005 a 009; não a aponte para o banco antigo sem migrar primeiro uma cópia aprovada.
+Use Node 24.21 (versão verificada) e preencha somente as duas variáveis públicas em `.env.local` com o projeto de teste. A aplicação exige as migrations 005 a 010; não a aponte para o banco antigo sem migrar primeiro uma cópia aprovada.
 
 `supabase/schema.sql` é somente o baseline histórico anterior ao beta, não um snapshot atual. Para banco vazio ou clone existente, siga a sequência em `docs/MIGRATIONS.md`.
 

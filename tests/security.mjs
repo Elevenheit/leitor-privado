@@ -33,6 +33,7 @@ await db.exec(readFileSync("supabase/migrations/006_visible_series_comments.sql"
 await db.exec(readFileSync("supabase/migrations/007_storage_visibility.sql", "utf8"));
 await db.exec(readFileSync("supabase/migrations/008_nonnegative_catalog_numbers.sql", "utf8"));
 await db.exec(readFileSync("supabase/migrations/009_reader_navigation.sql", "utf8"));
+await db.exec(readFileSync("supabase/migrations/010_comment_report_rate_limit.sql", "utf8"));
 await db.exec(
   `grant usage on schema public,auth,storage to authenticated; grant select,insert,update,delete on storage.objects to authenticated; grant execute on function auth.uid() to authenticated;`,
 );
@@ -173,6 +174,10 @@ await as(
   `insert into comment_reports(comment_id,owner_id,reason) values('cccccccc-cccc-4ccc-8ccc-cccccccccccc','${b}','Teste de denúncia')`,
 );
 assert.equal((await as(admin, "select * from comment_reports")).rows.length, 1);
+assert.equal((await as(a, `select * from comment_reports where owner_id='${b}'`)).rows.length, 0);
+await assert.rejects(as(b, `update comment_reports set reason='Changed report' where owner_id='${b}'`));
+await assert.rejects(as(b, `delete from comment_reports where owner_id='${b}'`));
+await assert.rejects(as(b, `insert into comment_reports(comment_id,owner_id,reason) values('cccccccc-cccc-4ccc-8ccc-cccccccccccc','${b}','Second report')`));
 await as(
   admin,
   `delete from comments where id='cccccccc-cccc-4ccc-8ccc-cccccccccccc'`,
@@ -231,6 +236,9 @@ await as(
   `insert into comments(id,series_id,owner_id,body) values('dddddddd-dddd-4ddd-8ddd-dddddddddddd','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','${a}','Parent')`,
 );
 await as(a, `update comments set body='Owner edit' where id='dddddddd-dddd-4ddd-8ddd-dddddddddddd'`);
+await assert.rejects(as(a, `update comments set owner_id='${b}' where id='dddddddd-dddd-4ddd-8ddd-dddddddddddd'`));
+await assert.rejects(as(a, `update comments set series_id='eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee' where id='dddddddd-dddd-4ddd-8ddd-dddddddddddd'`));
+await assert.rejects(as(a, `insert into comments(series_id,owner_id,body) values('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','${a}',repeat('x',2001))`));
 assert.equal((await as(a, `select body from comments where id='dddddddd-dddd-4ddd-8ddd-dddddddddddd'`)).rows[0].body, "Owner edit");
 assert.equal((await as(b, `update comments set body='Non-owner edit' where id='dddddddd-dddd-4ddd-8ddd-dddddddddddd' returning id`)).rows.length, 0);
 await as(
