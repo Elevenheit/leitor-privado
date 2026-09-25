@@ -32,6 +32,7 @@ await db.exec(`insert into public.beta_access(user_id,role,expires_at) values('$
 await db.exec(readFileSync("supabase/migrations/006_visible_series_comments.sql", "utf8"));
 await db.exec(readFileSync("supabase/migrations/007_storage_visibility.sql", "utf8"));
 await db.exec(readFileSync("supabase/migrations/008_nonnegative_catalog_numbers.sql", "utf8"));
+await db.exec(readFileSync("supabase/migrations/009_reader_navigation.sql", "utf8"));
 await db.exec(
   `grant usage on schema public,auth,storage to authenticated; grant select,insert,update,delete on storage.objects to authenticated; grant execute on function auth.uid() to authenticated;`,
 );
@@ -81,6 +82,9 @@ insert into storage.objects(bucket_id,name) values('novels','${admin}/hidden.pdf
 assert.equal((await as(a, `select * from series where id='eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'`)).rows.length, 0);
 assert.equal((await as(a, `select * from volumes where id='99999999-9999-4999-8999-999999999999'`)).rows.length, 0);
 assert.equal((await as(a, `select * from books where id='88888888-8888-4888-8888-888888888888'`)).rows.length, 0);
+const hiddenNeighbors = await as(a, `select * from public.reader_navigation_neighbors('88888888-8888-4888-8888-888888888888')`);
+assert.equal(hiddenNeighbors.rows[0].previous_id, null);
+assert.equal(hiddenNeighbors.rows[0].next_id, null);
 assert.equal((await as(a, `select * from comments where series_id='eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'`)).rows.length, 0);
 await assert.rejects(as(a, `insert into comments(series_id,owner_id,body) values('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee','${a}','Attempt')`));
 await assert.rejects(as(a, `insert into comment_reports(comment_id,owner_id,reason) values('ffffffff-ffff-4fff-8fff-ffffffffffff','${a}','Hidden comment')`));
@@ -88,6 +92,9 @@ await as(
   admin,
   `update series set beta_visible=true,rights_note='Original test fixture, authorized' where id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'`,
 );
+const readerNeighbors = await as(a, `select * from public.reader_navigation_neighbors('66666666-6666-4666-8666-666666666666')`);
+assert.equal(readerNeighbors.rows[0].previous_id, null);
+assert.equal(readerNeighbors.rows[0].next_id, "55555555-5555-4555-8555-555555555555");
 assert.equal((await as(a, "select * from books")).rows.length, 3);
 assert.equal((await as(a, "select * from storage.objects")).rows.length, 1);
 assert.equal((await as(a, `select * from storage.objects where name='${admin}/hidden.pdf'`)).rows.length, 0);

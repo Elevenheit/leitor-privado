@@ -12,11 +12,13 @@ As migrations versionadas e os arquivos SQL de bootstrap são a referência para
 6. `supabase/migrations/006_visible_series_comments.sql` corrige o acesso a comentários para seguir a visibilidade da obra.
 7. `supabase/migrations/007_storage_visibility.sql` faz a leitura de mídia privada seguir a publicação da obra e mantém objetos sem referência indisponíveis aos leitores.
 
-8. supabase/migrations/008_nonnegative_catalog_numbers.sql permite capitulos e volumes numerados a partir de zero e rejeita valores negativos.
+8. `supabase/migrations/008_nonnegative_catalog_numbers.sql` permite capitulos e volumes numerados a partir de zero e rejeita negativos.
+
+9. `supabase/migrations/009_reader_navigation.sql` retorna somente os IDs anterior/proximo respeitando as policies RLS existentes.
 
 ## Banco no estado anterior ao beta
 
-Confirme que o banco já tem o baseline, a migration 002 e a 004. Faça backup; execute a 005 uma única vez, promova a conta administradora conforme o procedimento acima e aplique as migrations 006, 007 e 008. A 005 transforma a chave e os dados de progresso, copia favoritos, cria perfis e substitui policies; não é uma migration segura para repetição. As correções 006 e 007 limitam comentários e mídia privada às obras visíveis.
+Confirme que o banco já tem o baseline, a migration 002 e a 004. Faça backup; execute a 005 uma única vez, promova a conta administradora conforme o procedimento acima e aplique as migrations 006, 007, 008 e 009. A 005 transforma a chave e os dados de progresso, copia favoritos, cria perfis e substitui policies; não é uma migration segura para repetição. As correções 006 e 007 limitam comentários e mídia privada às obras visíveis.
 
 ## Alterações futuras
 

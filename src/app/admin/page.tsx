@@ -99,22 +99,25 @@ function Dashboard({ user }: { user: User }) {
 
   const load = useCallback(async () => {
     const api = supabase();
-    const [b, s, v, p, f] = await Promise.all([
+    const [b, s, v, f] = await Promise.all([
       api
         .from("books")
-        .select("*")
+        .select("id,owner_id,title,original_filename,file_path,size_bytes,total_pages,created_at,series_id,volume_id,chapter_number,chapter_title,sort_order,content_type,media_type,skip_intro,intro_end")
         .eq("owner_id", user.id)
         .order("created_at", { ascending: false }),
-      api.from("series").select("*").eq("owner_id", user.id).order("title"),
+      api.from("series").select("id,owner_id,title,description,cover_path,created_at,updated_at,format,tags,rights_note,beta_visible").eq("owner_id", user.id).order("title"),
       api
         .from("volumes")
-        .select("*")
+        .select("id,owner_id,series_id,volume_number,title,description,sort_order,created_at,updated_at")
         .eq("owner_id", user.id)
         .order("sort_order")
         .order("volume_number"),
-      api.from("reading_progress").select("*").eq("owner_id", user.id),
       api.from("favorites").select("series_id").eq("owner_id",user.id),
     ]);
+    const bookIds = (b.data || []).map((item) => item.id);
+    const p = bookIds.length
+      ? await api.from("reading_progress").select("owner_id,book_id,page_number,line_index,scroll_ratio,reading_mode,updated_at,completed,position_seconds").eq("owner_id", user.id).in("book_id", bookIds)
+      : { data: [], error: null };
     const failure = b.error || s.error || v.error || p.error || f.error;
     if (failure) setError(failure.message);
     else {

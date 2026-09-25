@@ -28,11 +28,11 @@ function Work({ id, user }: { id: string; user: User }) {
     async function load() {
       try {
         const api = supabase();
-        const [s, b, v, p] = await Promise.all([
-          api.from("series").select("*").eq("id", id).single(),
+        const [s, b, v] = await Promise.all([
+          api.from("series").select("id,owner_id,title,description,cover_path,format,beta_visible,rights_note").eq("id", id).single(),
           api
             .from("books")
-            .select("*")
+            .select("id,owner_id,title,original_filename,file_path,size_bytes,total_pages,created_at,series_id,volume_id,chapter_number,chapter_title,sort_order,content_type,media_type,skip_intro,intro_end")
             .eq("series_id", id)
             .order("sort_order")
             .order("chapter_number")
@@ -40,15 +40,19 @@ function Work({ id, user }: { id: string; user: User }) {
             .range(page * 100, page * 100 + 99),
           api
             .from("volumes")
-            .select("*")
+            .select("id,owner_id,series_id,volume_number,title,description,sort_order,created_at,updated_at")
             .eq("series_id", id)
             .order("sort_order")
             .order("volume_number"),
-          api.from("reading_progress").select("*").eq("owner_id", user.id),
         ]);
-        if (s.error || b.error || v.error || p.error) throw new Error();
+        if (s.error || b.error || v.error) throw new Error();
         if (!live) return;
-        setSeries(s.data);
+        const bookIds = (b.data || []).map((item) => item.id);
+        const p = bookIds.length
+          ? await api.from("reading_progress").select("owner_id,book_id,page_number,line_index,scroll_ratio,reading_mode,updated_at,completed,position_seconds").eq("owner_id", user.id).in("book_id", bookIds)
+          : { data: [], error: null };
+        if (p.error) throw p.error;
+        setSeries(s.data as Series);
         setBooks(b.data || []);
         setVolumes(v.data || []);
         setProgress(p.data || []);

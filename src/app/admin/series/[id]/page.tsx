@@ -45,14 +45,17 @@ function SeriesDetail({ user, id }: { user: User; id: string }) {
 
   const load = useCallback(async () => {
     const api = supabase();
-    const [s, v, b, p, allSeries, userVolumes] = await Promise.all([
-      api.from("series").select("*").eq("id", id).eq("owner_id", user.id).maybeSingle(),
-      api.from("volumes").select("*").eq("series_id", id).eq("owner_id", user.id).order("sort_order").order("volume_number"),
-      api.from("books").select("*").eq("series_id", id).eq("owner_id", user.id).order("sort_order").order("chapter_number"),
-      api.from("reading_progress").select("*").eq("owner_id", user.id),
-      api.from("series").select("*").eq("owner_id", user.id).order("title"),
-      api.from("volumes").select("*").eq("owner_id", user.id).order("sort_order").order("volume_number"),
+    const [s, v, b, allSeries, userVolumes] = await Promise.all([
+      api.from("series").select("id,owner_id,title,description,cover_path,format,created_at,updated_at,tags,rights_note,beta_visible").eq("id", id).eq("owner_id", user.id).maybeSingle(),
+      api.from("volumes").select("id,owner_id,series_id,volume_number,title,description,sort_order,created_at,updated_at").eq("series_id", id).eq("owner_id", user.id).order("sort_order").order("volume_number"),
+      api.from("books").select("id,owner_id,title,original_filename,file_path,size_bytes,total_pages,created_at,series_id,volume_id,chapter_number,chapter_title,sort_order,content_type,media_type,skip_intro,intro_end").eq("series_id", id).eq("owner_id", user.id).order("sort_order").order("chapter_number"),
+      api.from("series").select("id,title").eq("owner_id", user.id).order("title"),
+      api.from("volumes").select("id,owner_id,series_id,volume_number,title,description,sort_order,created_at,updated_at").eq("owner_id", user.id).order("sort_order").order("volume_number"),
     ]);
+    const bookIds = (b.data || []).map((item) => item.id);
+    const p = bookIds.length
+      ? await api.from("reading_progress").select("owner_id,book_id,page_number,line_index,scroll_ratio,reading_mode,updated_at,completed,position_seconds").eq("owner_id", user.id).in("book_id", bookIds)
+      : { data: [], error: null };
     const failure = s.error || v.error || b.error || p.error || allSeries.error || userVolumes.error;
     if (failure) setError(failure.message);
     else {

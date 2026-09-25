@@ -35,7 +35,7 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
   const [fit, setFit] = useState("width");
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [next, setNext] = useState<Book | null>(null);
+  const [next, setNext] = useState<Pick<Book, "id" | "media_type"> | null>(null);
   const worker = useRef<Worker | null>(null);
   const video = useRef<HTMLVideoElement | null>(null);
   const authRetryUrl = useRef<string | null>(null);
@@ -138,7 +138,7 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
       try {
         const api = supabase();
         const [b, p] = await Promise.all([
-          api.from("books").select("*").eq("id", id).single(),
+          api.from("books").select("id,owner_id,title,original_filename,file_path,size_bytes,total_pages,created_at,series_id,volume_id,chapter_number,chapter_title,sort_order,content_type,media_type,skip_intro,intro_end").eq("id", id).single(),
           api
             .from("reading_progress")
             .select("page_number,position_seconds,scroll_ratio")
@@ -237,16 +237,13 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
           w.postMessage({ archive: bytes.buffer }, [bytes.buffer]);
         } else throw Error("Abra este arquivo no leitor de PDF.");
         if (item.series_id) {
-          const r = await api
-            .from("books")
-            .select("*")
-            .eq("series_id", item.series_id)
-            .order("sort_order")
-            .order("chapter_number")
-            .order("id");
-          const rows = (r.data || []) as Book[];
-          const i = rows.findIndex((x) => x.id === id);
-          if (live) setNext(rows[i + 1] || null);
+          const neighbors = await api.rpc("reader_navigation_neighbors", { target_book_id: id }).maybeSingle().returns<{ previous_id: string | null; next_id: string | null }>();
+          if (neighbors.error) throw neighbors.error;
+          if (neighbors.data?.next_id) {
+            const upcoming = await api.from("books").select("id,media_type").eq("id", neighbors.data.next_id).maybeSingle();
+            if (upcoming.error) throw upcoming.error;
+            if (live) setNext(upcoming.data as Pick<Book, "id" | "media_type"> | null);
+          }
         }
       } catch (e) {
         if (live)

@@ -24,7 +24,6 @@ import { BookmarkPanel } from "@/components/reader/bookmark-panel";
 import { InlineIllustration } from "@/components/reader/inline-illustration";
 import { ReaderIndex } from "@/components/reader/reader-index";
 import { LazyPdfPage } from "@/components/reader/lazy-pdf-page";
-import { sortBooks } from "@/lib/reader-navigation";
 import {
   createReaderIllustrationExtractor,
   type ReaderIllustration,
@@ -126,6 +125,8 @@ function Reader({ user, id }: { user: User; id: string }) {
   const [previousId, setPreviousId] = useState<string | null>(null);
   const [nextId, setNextId] = useState<string | null>(null);
   const [libraryBooks, setLibraryBooks] = useState<Book[]>([]);
+  const [libraryHasMore, setLibraryHasMore] = useState(true);
+  const [libraryLoading, setLibraryLoading] = useState(false);
   const [libraryVolumes, setLibraryVolumes] = useState<Volume[]>([]);
   const [libraryProgress, setLibraryProgress] = useState<
     Record<string, ReadingProgress>
@@ -234,6 +235,52 @@ function Reader({ user, id }: { user: User; id: string }) {
     saveRef.current = save;
   }, [save]);
 
+  const loadLibraryPage = useCallback(async () => {
+    if (!book || libraryLoading || !libraryHasMore) return;
+    setLibraryLoading(true);
+    const offset = libraryBooks.length;
+    try {
+      const api = supabase();
+      let booksQuery = api.from("books").select("id,owner_id,title,original_filename,file_path,size_bytes,total_pages,created_at,series_id,volume_id,chapter_number,chapter_title,sort_order,content_type,media_type,skip_intro,intro_end");
+      booksQuery = book.series_id
+        ? booksQuery.eq("series_id", book.series_id)
+        : booksQuery.is("series_id", null);
+      const { data, error: booksError } = await booksQuery
+        .order("sort_order")
+        .order("chapter_number")
+        .order("id")
+        .range(offset, offset + 99);
+      if (booksError) throw booksError;
+      const rows = (data || []) as Book[];
+      if (rows.length) {
+        const ids = rows.map((item) => item.id);
+        const { data: saved, error: progressError } = await api
+          .from("reading_progress")
+          .select("owner_id,book_id,page_number,line_index,scroll_ratio,reading_mode,updated_at,completed,position_seconds")
+          .eq("owner_id", user.id)
+          .in("book_id", ids);
+        if (progressError) throw progressError;
+        setLibraryBooks((previous) => [...previous, ...rows]);
+        setLibraryProgress((previous) => ({
+          ...previous,
+          ...Object.fromEntries(((saved || []) as ReadingProgress[]).map((item) => [item.book_id, item])),
+        }));
+      }
+      setLibraryHasMore(rows.length === 100);
+    } catch {
+      setError("NÃ£o foi possÃ­vel carregar o Ã­ndice da obra.");
+      setLibraryHasMore(false);
+    } finally {
+      setLibraryLoading(false);
+    }
+  }, [book, libraryBooks.length, libraryHasMore, libraryLoading, user.id]);
+
+  useEffect(() => {
+    if (!indexOpen || libraryBooks.length > 0 || !libraryHasMore || libraryLoading) return;
+    const timer = setTimeout(() => void loadLibraryPage(), 0);
+    return () => clearTimeout(timer);
+  }, [indexOpen, libraryBooks.length, libraryHasMore, libraryLoading, loadLibraryPage]);
+
   useEffect(() => {
     let cancelled = false;
     let task: PDFDocumentLoadingTask | null = null;
@@ -242,29 +289,34 @@ function Reader({ user, id }: { user: User; id: string }) {
       try {
         const api = supabase();
         const [bookResult, progressResult] = await Promise.all([
-          api.from("books").select("*").eq("id", id).single(),
-          api.from("reading_progress").select("*").eq("owner_id", user.id),
+          api.from("books").select("id,owner_id,title,original_filename,file_path,size_bytes,total_pages,created_at,series_id,volume_id,chapter_number,chapter_title,sort_order,content_type,media_type,skip_intro,intro_end").eq("id", id).single(),
+          api.from("reading_progress").select("owner_id,book_id,page_number,line_index,scroll_ratio,reading_mode,updated_at,completed,position_seconds").eq("owner_id", user.id).eq("book_id", id).maybeSingle(),
         ]);
         if (bookResult.error || !bookResult.data)
           throw new Error("Capítulo não encontrado ou sem acesso.");
         const current = bookResult.data as Book;
-        const [workResult, volumeResult, privateUrl] = await Promise.all([
+        const [workResult, volumeResult, privateUrl, indexVolumes, neighborsResult] = await Promise.all([
           current.series_id
             ? api
                 .from("series")
-                .select("*")
+                .select("id,owner_id,title,description,cover_path,format,created_at,updated_at,tags,rights_note,beta_visible")
                 .eq("id", current.series_id)
                 .maybeSingle()
             : Promise.resolve({ data: null, error: null }),
           current.volume_id
             ? api
                 .from("volumes")
-                .select("*")
+                .select("id,owner_id,series_id,volume_number,title,description,sort_order,created_at,updated_at")
                 .eq("id", current.volume_id)
                 .maybeSingle()
             : Promise.resolve({ data: null, error: null }),
           createPrivateMediaUrl(BUCKET, current.file_path),
+          current.series_id
+            ? api.from("volumes").select("id,owner_id,series_id,volume_number,title,description,sort_order,created_at,updated_at").eq("series_id", current.series_id).order("sort_order").order("volume_number")
+            : Promise.resolve({ data: [] as Volume[], error: null }),
+          api.rpc("reader_navigation_neighbors", { target_book_id: id }).maybeSingle().returns<{ previous_id: string | null; next_id: string | null }>(),
         ]);
+        if (neighborsResult.error) throw neighborsResult.error;
         const pdfjs = await import("pdfjs-dist");
         pdfjs.GlobalWorkerOptions.workerSrc = new URL(
           "pdfjs-dist/build/pdf.worker.min.mjs",
@@ -298,9 +350,7 @@ function Reader({ user, id }: { user: User; id: string }) {
             }
           });
         }, refreshIn);
-        const allUserProgress = (progressResult.data ||
-          []) as ReadingProgress[];
-        const saved = allUserProgress.find((item) => item.book_id === id);
+        const saved = progressResult.data as ReadingProgress | null;
         const start = Math.min(
           loaded.numPages,
           Math.max(1, saved?.page_number ?? 1),
@@ -328,35 +378,12 @@ function Reader({ user, id }: { user: User; id: string }) {
             Math.min(loaded.numPages, start + 1),
           ]),
         );
-        const [allBooks, allVolumes] = await Promise.all([
-          current.series_id
-            ? api.from("books").select("*").eq("series_id", current.series_id)
-            : api.from("books").select("*").is("series_id", null),
-          current.series_id
-            ? api.from("volumes").select("*").eq("series_id", current.series_id)
-            : Promise.resolve({ data: [] as Volume[], error: null }),
-        ]);
-        if (!cancelled && allBooks.data) {
-          const volumeList = (allVolumes.data || []) as Volume[];
-          const bookList = sortBooks(allBooks.data as Book[], volumeList);
-          setLibraryBooks(bookList);
-          setLibraryVolumes(volumeList);
-          const bookIds = new Set(bookList.map((item) => item.id));
-          setLibraryProgress(
-            Object.fromEntries(
-              allUserProgress
-                .filter((item) => bookIds.has(item.book_id))
-                .map((item) => [item.book_id, item]),
-            ),
-          );
-          const index = bookList.findIndex((item) => item.id === id);
-          setPreviousId(index > 0 ? bookList[index - 1].id : null);
-          setNextId(
-            index >= 0 && index < bookList.length - 1
-              ? bookList[index + 1].id
-              : null,
-          );
-        }
+        setLibraryVolumes((indexVolumes.data || []) as Volume[]);
+        setLibraryBooks([]);
+        setLibraryProgress({});
+        setLibraryHasMore(true);
+        setPreviousId(neighborsResult.data?.previous_id || null);
+        setNextId(neighborsResult.data?.next_id || null);
         // Catalog metadata is written only by administrators.
         try {
           const prefs = localStorage.getItem("nook-reader-prefs");
@@ -1115,6 +1142,9 @@ function Reader({ user, id }: { user: User; id: string }) {
           currentId={id}
           onClose={() => setIndexOpen(false)}
           onNavigate={(bookId) => void save().finally(() => router.push(`/read/${bookId}`))}
+          onLoadMore={() => void loadLibraryPage()}
+          hasMore={libraryHasMore}
+          loading={libraryLoading}
         />
       )}
       {bookmarksOpen && (
