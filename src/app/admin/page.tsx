@@ -24,6 +24,7 @@ import { BatchUploadModal } from "@/components/library/batch-upload-modal";
 import { ConfirmDialog } from "@/components/modals/confirm-dialog";
 import { Nav } from "@/components/nav";
 import { supabase } from "@/lib/supabase";
+import { calculateReadingProgress } from "@/lib/media-rules";
 import { deleteBookAndFile, deleteSeriesAndMedia, replaceStorageReference, uploadAndRegisterBook } from "@/lib/data/uploads";
 import {
   formatSize,
@@ -469,15 +470,18 @@ function Dashboard({ user }: { user: User }) {
   const recentSeries = recent
     ? series.find((item) => item.id === recent.series_id)
     : null;
-  const recentPercent =
-    recent && recent.total_pages
-      ? Math.min(
-          100,
-          Math.round(
-            (progress[recent.id].page_number / recent.total_pages) * 100,
-          ),
-        )
-      : 0;
+  const recentPercent = recent
+    ? progress[recent.id].completed && recent.media_type !== "pdf"
+      ? 100
+      : calculateReadingProgress({
+        mediaType: recent.media_type,
+        pageNumber: progress[recent.id].page_number,
+        totalPages: recent.total_pages,
+        scrollRatio: progress[recent.id].scroll_ratio,
+        positionSeconds: progress[recent.id].position_seconds,
+        reachedEnd: progress[recent.id].completed,
+      }).percent
+    : 0;
   const relevantVolumes = volumes.filter((v) => v.series_id === selectedSeries);
   const selectedSeriesData = series.find((item) => item.id === selectedSeries);
   const selectedFormat = selectedSeriesData?.format || null;

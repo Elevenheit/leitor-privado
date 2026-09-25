@@ -1,4 +1,5 @@
 import type { Book, ReadingProgress, Volume } from "@/lib/types";
+import { calculateReadingProgress } from "@/lib/media-rules";
 
 function compareNumbers(a: number | null | undefined, b: number | null | undefined) {
   return (a ?? Number.MAX_SAFE_INTEGER) - (b ?? Number.MAX_SAFE_INTEGER);
@@ -29,5 +30,14 @@ export function sortBooks(books: Book[], volumes: Volume[]) {
 
 export function readingStatus(book: Book, progress?: ReadingProgress) {
   if (!progress) return "Não iniciado";
-  return book.total_pages && progress.page_number >= book.total_pages ? "Concluído" : "Em leitura";
+  if (book.media_type !== "pdf" && progress.completed) return "Concluido";
+  const measured = calculateReadingProgress({
+    mediaType: book.media_type,
+    pageNumber: progress.page_number,
+    totalPages: book.total_pages,
+    scrollRatio: progress.scroll_ratio,
+    positionSeconds: progress.position_seconds,
+    reachedEnd: progress.completed,
+  });
+  return measured.completed ? "Concluido" : "Em leitura";
 }

@@ -29,6 +29,7 @@ import {
   type ReaderIllustration,
 } from "@/lib/reader-illustrations";
 import { BUCKET, supabase } from "@/lib/supabase";
+import { calculateReadingProgress } from "@/lib/media-rules";
 import { extractReadingBlocks, type ReadingBlock } from "@/lib/reader-text";
 import type {
   Book,
@@ -189,7 +190,12 @@ function Reader({ user, id }: { user: User; id: string }) {
           line_index: lineIndex,
           scroll_ratio: ratio,
           reading_mode: modeRef.current,
-          completed: pages > 0 && pageRef.current >= pages,
+          completed: calculateReadingProgress({
+            mediaType: "pdf",
+            pageNumber: pageRef.current,
+            totalPages: pages,
+            scrollRatio: ratio,
+          }).completed,
           updated_at: new Date().toISOString(),
         },
         { onConflict: "owner_id,book_id" },

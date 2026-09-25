@@ -7,7 +7,7 @@ import type { User } from "@supabase/supabase-js";
 import { AuthGate } from "@/components/auth-gate";
 import { Nav } from "@/components/nav";
 import { supabase, BUCKET } from "@/lib/supabase";
-import { introTarget, CBZ_LIMITS } from "@/lib/media-rules";
+import { calculateReadingProgress, introTarget, CBZ_LIMITS } from "@/lib/media-rules";
 import type { Book } from "@/lib/types";
 import type { Format } from "@/lib/catalog";
 import { mediaHref } from "@/lib/catalog";
@@ -45,9 +45,20 @@ function Media({ id, user }: { id: string; user: User }) {
   const scrollRestore = useRef(0);
   const imageArea = useRef<HTMLDivElement | null>(null);
   const save = useCallback(
-    async (seconds: number, p: number, completed = false, ratio = 0) => {
+    async (seconds: number, p: number, reachedEnd = false, ratio?: number) => {
       if (!ready.current) return;
-      const { error } = await supabase()
+      const calculated = book
+        ? calculateReadingProgress({
+            mediaType: book.media_type,
+            pageNumber: p + 1,
+            totalPages: book.media_type === "video" ? null : count,
+            scrollRatio: ratio,
+            positionSeconds: seconds,
+            durationSeconds: duration,
+            reachedEnd,
+          })
+        : { completed: false };
+      const { error: saveError } = await supabase()
         .from("reading_progress")
         .upsert(
           {
@@ -55,18 +66,16 @@ function Media({ id, user }: { id: string; user: User }) {
             book_id: id,
             page_number: p + 1,
             position_seconds: Math.max(0, seconds),
-            scroll_ratio: Math.min(1, Math.max(0, ratio)),
+            scroll_ratio: Math.min(1, Math.max(0, ratio ?? 0)),
             reading_mode: "page",
-            completed,
+            completed: calculated.completed,
             updated_at: new Date().toISOString(),
           },
           { onConflict: "owner_id,book_id" },
         );
-      setStatus(
-        error ? "Progresso não salvo. Confira a conexão." : "Progresso salvo",
-      );
+      setStatus(saveError ? "Progresso nao salvo. Confira a conexao." : "Progresso salvo");
     },
-    [id, user.id],
+    [book, count, duration, id, user.id],
   );
   useEffect(() => {
     const urls = objectUrls.current;
@@ -229,7 +238,7 @@ function Media({ id, user }: { id: string; user: User }) {
         const direction = (e.key === "ArrowRight" ? 1 : -1) * (rtl ? -1 : 1);
         setPage((p) => {
           const n = Math.max(0, Math.min(count - 1, p + direction));
-          void save(0, n, n === count - 1);
+          void save(0, n);
           return n;
         });
       }
@@ -242,7 +251,7 @@ function Media({ id, user }: { id: string; user: User }) {
     setPage(p);
     scrollRestore.current = 0;
     imageArea.current?.scrollTo(0, 0);
-    void save(0, p, p === count - 1);
+    void save(0, p);
   }
   const target = introTarget(
     Boolean(book?.skip_intro),
@@ -278,7 +287,7 @@ function Media({ id, user }: { id: string; user: User }) {
             const el = area;
             const top = el ? el.getBoundingClientRect().top + window.scrollY : 0;
             const ratio = el ? (window.scrollY - top) / Math.max(1, el.scrollHeight - window.innerHeight) : 0;
-            void save(0, activeIndex, activeIndex === count - 1, ratio);
+            void save(0, activeIndex, false, ratio);
           }
         }
       }
@@ -301,7 +310,7 @@ function Media({ id, user }: { id: string; user: User }) {
       lastSave.current = Date.now();
       const top = area.getBoundingClientRect().top + window.scrollY;
       const ratio = (window.scrollY - top) / Math.max(1, area.scrollHeight - window.innerHeight);
-      void save(0, activeIndex, activeIndex === count - 1, ratio);
+      void save(0, activeIndex, false, ratio);
     };
     window.addEventListener("scroll", handleScroll, { passive: true });
     return () => window.removeEventListener("scroll", handleScroll);
@@ -374,7 +383,7 @@ function Media({ id, user }: { id: string; user: User }) {
                   if (video.current) {
                     video.current.currentTime = target;
                     setTime(target);
-                    void save(target, 0, target === duration);
+                    void save(target, 0, target >= duration);
                   }
                 }}
               >

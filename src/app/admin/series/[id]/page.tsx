@@ -10,6 +10,7 @@ import { AuthGate } from "@/components/auth-gate";
 import { ConfirmDialog } from "@/components/modals/confirm-dialog";
 import { Nav } from "@/components/nav";
 import { supabase } from "@/lib/supabase";
+import { calculateReadingProgress } from "@/lib/media-rules";
 import type { Book, ReadingProgress, Series, Volume } from "@/lib/types";
 
 export default function SeriesPage({ params }: { params: Promise<{ id: string }> }) {
@@ -148,7 +149,7 @@ function SeriesDetail({ user, id }: { user: User; id: string }) {
 
 function ChapterList({ chapters, progress, onEdit }: { chapters: Book[]; progress: Record<string, ReadingProgress>; onEdit: (book: Book) => void }) {
   return <ol className="chapter-list">{chapters.map((book, index) => {
-    const saved = progress[book.id]; const done = Boolean(book.total_pages && saved && saved.page_number >= book.total_pages); const percent = done ? 100 : saved && book.total_pages ? Math.min(99, Math.round(saved.page_number / book.total_pages * 100)) : 0;
+    const saved = progress[book.id]; const measured = saved ? calculateReadingProgress({ mediaType: book.media_type, pageNumber: saved.page_number, totalPages: book.total_pages, scrollRatio: saved.scroll_ratio, positionSeconds: saved.position_seconds, reachedEnd: saved.completed }) : null; const done = measured?.completed || (book.media_type !== "pdf" && Boolean(saved?.completed)); const percent = done ? 100 : measured?.percent || 0;
     return <li className="chapter-row" key={book.id}><span className={`chapter-number ${book.content_type === "volume" ? "volume-number" : ""}`}>{book.content_type === "volume" ? `V${book.chapter_number ?? ""}` : book.chapter_number ?? index + 1}</span><div className="chapter-info"><Link href={mediaHref(book)}>{book.content_type === "volume" ? `Volume completo · ${book.chapter_title || book.title}` : book.chapter_title || book.title}</Link><small>{done ? "Concluído" : saved ? "Lendo" : "Não iniciado"}{saved && book.total_pages ? ` · ${percent}%` : ""}</small><div className="book-progress"><div style={{ width: `${percent}%` }}/></div></div><Link className="chapter-continue" href={mediaHref(book)}>{saved ? "Continuar" : "Ler"}<ChevronRight size={16}/></Link><button className="chapter-edit" onClick={() => onEdit(book)} aria-label="Editar capítulo ou mover"><Pencil size={15}/></button></li>;
   })}{!chapters.length && <li className="chapter-empty">Ainda não há capítulos neste volume.</li>}</ol>;
 }

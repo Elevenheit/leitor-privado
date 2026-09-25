@@ -16,6 +16,52 @@ export function introTarget(
     return null;
   return Math.min(end, duration);
 }
+
+export type ReadingProgressInput = {
+  mediaType: "pdf" | "cbz" | "video";
+  pageNumber?: number;
+  totalPages?: number | null;
+  scrollRatio?: number;
+  positionSeconds?: number;
+  durationSeconds?: number;
+  reachedEnd?: boolean;
+};
+
+export function calculateReadingProgress(input: ReadingProgressInput) {
+  const ratio = Number.isFinite(input.scrollRatio)
+    ? Math.min(1, Math.max(0, input.scrollRatio!))
+    : 0;
+  const pageNumber = Math.max(1, input.pageNumber ?? 1);
+  const totalPages = input.totalPages ?? 0;
+  if (input.mediaType === "video") {
+    const duration = input.durationSeconds ?? 0;
+    const position = Math.max(0, input.positionSeconds ?? 0);
+    const percent = duration > 0 ? Math.min(1, position / duration) : 0;
+    return {
+      percent: Math.round(percent * 100),
+      completed:
+        Boolean(input.reachedEnd) ||
+        (duration > 0 && position / duration >= 0.95),
+    };
+  }
+  if (input.mediaType === "pdf") {
+    return {
+      percent: Math.round(ratio * 100),
+      completed:
+        totalPages > 0 && pageNumber >= totalPages && ratio >= 0.95,
+    };
+  }
+  const pageRatio = totalPages > 0 ? Math.min(1, pageNumber / totalPages) : 0;
+  const percent = input.scrollRatio === undefined ? pageRatio : ratio;
+  return {
+    percent: Math.round(percent * 100),
+    completed:
+      totalPages > 0 &&
+      pageNumber >= totalPages &&
+      (input.scrollRatio === undefined || ratio >= 0.95),
+  };
+}
+
 export function naturalPages(names: string[]) {
   return names
     .filter(

@@ -5,10 +5,12 @@ import { useEffect, useState } from "react";
 import { ArrowUpRight, BookOpen, Play } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { formats, mediaHref, type Format } from "@/lib/catalog";
+import { calculateReadingProgress } from "@/lib/media-rules";
 
 type RecentEntry = {
   book_id: string;
   page_number: number;
+  scroll_ratio: number;
   position_seconds: number;
   completed: boolean;
   updated_at: string;
@@ -31,7 +33,7 @@ type RecentEntry = {
 };
 
 function position(entry: RecentEntry) {
-  if (entry.completed) return { label: "Concluído", percent: 100 };
+  if (entry.books.media_type !== "pdf" && entry.completed) return { label: "Concluido", percent: 100 };
   if (entry.books.media_type === "video") {
     const seconds = Math.max(0, Math.floor(entry.position_seconds));
     const hours = Math.floor(seconds / 3600);
@@ -43,10 +45,18 @@ function position(entry: RecentEntry) {
   }
   const total = entry.books.total_pages;
   const page = Math.max(1, entry.page_number);
+  const measured = calculateReadingProgress({
+    mediaType: entry.books.media_type === "cbz" ? "cbz" : "pdf",
+    pageNumber: page,
+    totalPages: total,
+    scrollRatio: entry.scroll_ratio,
+    positionSeconds: entry.position_seconds,
+  });
+  if (measured.completed) return { label: "Concluido", percent: 100 };
   return total && total > 0
     ? {
         label: `Página ${Math.min(page, total)} de ${total}`,
-        percent: Math.min(100, Math.round((page / total) * 100)),
+        percent: measured.percent,
       }
     : { label: `Página ${page}`, percent: null };
 }
@@ -92,7 +102,7 @@ export function RecentHistory({
         let query = api
           .from("reading_progress")
           .select(
-            "book_id,page_number,position_seconds,completed,updated_at,books!inner(id,title,media_type,total_pages,chapter_number,chapter_title,content_type,series!inner(id,title,format,cover_path),volumes(volume_number,title))",
+            "book_id,page_number,scroll_ratio,position_seconds,completed,updated_at,books!inner(id,title,media_type,total_pages,chapter_number,chapter_title,content_type,series!inner(id,title,format,cover_path),volumes(volume_number,title))",
           )
           .eq("owner_id", userId);
         if (format) query = query.eq("books.series.format", format);
