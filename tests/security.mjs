@@ -30,6 +30,7 @@ await db.exec(readFileSync("supabase/migrations/005_closed_beta.sql", "utf8"));
 assert.equal((await db.query(`select * from public.beta_access where user_id='${admin}'`)).rows.length, 0);
 await db.exec(`insert into public.beta_access(user_id,role,expires_at) values('${admin}','admin','infinity');`);
 await db.exec(readFileSync("supabase/migrations/006_visible_series_comments.sql", "utf8"));
+await db.exec(readFileSync("supabase/migrations/007_storage_visibility.sql", "utf8"));
 await db.exec(
   `grant usage on schema public,auth,storage to authenticated; grant select,insert,update,delete on storage.objects to authenticated; grant execute on function auth.uid() to authenticated;`,
 );
@@ -48,6 +49,14 @@ async function as(user, sql) {
     await db.exec("reset role");
   }
 }
+async function asAnon(sql) {
+  await db.exec("set role anon");
+  try {
+    return await db.query(sql);
+  } finally {
+    await db.exec("reset role");
+  }
+}
 assert.equal(
   (await as(admin, "select * from reading_progress")).rows[0].page_number,
   7,
@@ -59,16 +68,26 @@ assert.equal(
 assert.equal((await as(admin, "select * from favorites")).rows.length, 1);
 assert.equal((await as(a, "select * from books")).rows.length, 0);
 await db.exec(`insert into public.series(id,owner_id,title,beta_visible) values('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee','${admin}','Hidden series',false);
-insert into public.comments(id,series_id,owner_id,body) values('ffffffff-ffff-4fff-8fff-ffffffffffff','eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee','${admin}','Private moderation note')`);
+insert into public.volumes(id,owner_id,series_id,volume_number,title) values('99999999-9999-4999-8999-999999999999','${admin}','eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',1,'Hidden volume');
+insert into public.books(id,owner_id,title,original_filename,file_path,size_bytes,series_id,volume_id) values('88888888-8888-4888-8888-888888888888','${admin}','Hidden chapter','hidden.pdf','${admin}/hidden.pdf',1,'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee','99999999-9999-4999-8999-999999999999');
+insert into public.comments(id,series_id,owner_id,body) values('ffffffff-ffff-4fff-8fff-ffffffffffff','eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee','${admin}','Private moderation note');
+insert into storage.objects(bucket_id,name) values('novels','${admin}/hidden.pdf'),('novels','${admin}/orphan.pdf')`);
+assert.equal((await as(a, `select * from series where id='eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'`)).rows.length, 0);
+assert.equal((await as(a, `select * from volumes where id='99999999-9999-4999-8999-999999999999'`)).rows.length, 0);
+assert.equal((await as(a, `select * from books where id='88888888-8888-4888-8888-888888888888'`)).rows.length, 0);
 assert.equal((await as(a, `select * from comments where series_id='eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'`)).rows.length, 0);
 await assert.rejects(as(a, `insert into comments(series_id,owner_id,body) values('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee','${a}','Attempt')`));
 await assert.rejects(as(a, `insert into comment_reports(comment_id,owner_id,reason) values('ffffffff-ffff-4fff-8fff-ffffffffffff','${a}','Hidden comment')`));
 await as(
   admin,
-  `update series set beta_visible=true,rights_note='Original test fixture, authorized'`,
+  `update series set beta_visible=true,rights_note='Original test fixture, authorized' where id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'`,
 );
 assert.equal((await as(a, "select * from books")).rows.length, 1);
 assert.equal((await as(a, "select * from storage.objects")).rows.length, 1);
+assert.equal((await as(a, `select * from storage.objects where name='${admin}/hidden.pdf'`)).rows.length, 0);
+assert.equal((await as(a, `select * from storage.objects where name='${admin}/orphan.pdf'`)).rows.length, 0);
+assert.equal((await db.query("select public from storage.buckets where id='novels'")).rows[0].public, false);
+await assert.rejects(asAnon("select * from storage.objects"));
 assert.equal((await as(a, "select * from reading_progress")).rows.length, 0);
 assert.equal(
   (await as(a, `update books set title='Hacked' returning id`)).rows.length,
@@ -80,6 +99,7 @@ await assert.rejects(
     `insert into books(owner_id,title,original_filename,file_path,size_bytes) values('${a}','Hacked','x.pdf','x.pdf',1)`,
   ),
 );
+assert.equal((await as(a, `update series set beta_visible=true where id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' returning id`)).rows.length, 0);
 assert.equal(
   (
     await as(
@@ -89,6 +109,8 @@ assert.equal(
   ).rows.length,
   0,
 );
+assert.equal((await as(a, `select * from profiles where id='${b}'`)).rows.length, 0);
+await assert.rejects(as(a, `update profiles set id='${b}' where id='${a}'`));
 await assert.rejects(
   as(
     a,
@@ -111,12 +133,14 @@ assert.equal(
   (await as(b, "select * from reading_progress")).rows[0].page_number,
   10,
 );
+assert.equal((await as(a, `select * from reading_progress where owner_id='${b}'`)).rows.length, 0);
 await assert.rejects(
   as(
     a,
     `insert into reading_progress(owner_id,book_id) values('${b}','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb') on conflict(owner_id,book_id) do update set page_number=50`,
   ),
 );
+await assert.rejects(as(a, `update reading_progress set owner_id='${b}' where owner_id='${a}'`));
 await as(
   a,
   `insert into comments(id,series_id,owner_id,body) values('cccccccc-cccc-4ccc-8ccc-cccccccccccc','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','${a}','A real conversation')`,
@@ -177,9 +201,25 @@ await db.exec(
   `update beta_access set expires_at=now()+interval '7 days' where user_id='${b}'`,
 );
 await as(
+  b,
+  `insert into favorites(owner_id,series_id) values('${b}','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')`,
+);
+assert.equal((await as(a, `select * from favorites where owner_id='${b}'`)).rows.length, 0);
+assert.equal((await as(a, `update favorites set series_id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' where owner_id='${b}' returning owner_id`)).rows.length, 0);
+await assert.rejects(as(a, `insert into favorites(owner_id,series_id) values('${b}','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')`));
+await as(
+  b,
+  `insert into reading_bookmarks(owner_id,book_id,page_number,label) values('${b}','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',3,'Reader B bookmark')`,
+);
+assert.equal((await as(a, `select * from reading_bookmarks where owner_id='${b}'`)).rows.length, 0);
+assert.equal((await as(a, `update reading_bookmarks set label='Hacked' where owner_id='${b}' returning id`)).rows.length, 0);
+await as(
   a,
   `insert into comments(id,series_id,owner_id,body) values('dddddddd-dddd-4ddd-8ddd-dddddddddddd','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','${a}','Parent')`,
 );
+await as(a, `update comments set body='Owner edit' where id='dddddddd-dddd-4ddd-8ddd-dddddddddddd'`);
+assert.equal((await as(a, `select body from comments where id='dddddddd-dddd-4ddd-8ddd-dddddddddddd'`)).rows[0].body, "Owner edit");
+assert.equal((await as(b, `update comments set body='Non-owner edit' where id='dddddddd-dddd-4ddd-8ddd-dddddddddddd' returning id`)).rows.length, 0);
 await as(
   b,
   `insert into comments(series_id,owner_id,body,parent_id) values('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','${b}','Reply preserved','dddddddd-dddd-4ddd-8ddd-dddddddddddd')`,
@@ -193,4 +233,10 @@ assert.equal(
     .rows[0].body,
   "Reply preserved",
 );
+assert.equal((await as(b, "select * from storage.objects")).rows.length, 1);
+await db.exec(`update public.beta_access set revoked=true where user_id='${b}'`);
+assert.equal((await as(b, "select public.beta_member() as active")).rows[0].active, false);
+assert.equal((await as(b, "select * from books")).rows.length, 0);
+assert.equal((await as(b, "select * from storage.objects")).rows.length, 0);
+assert.equal((await as(b, "select * from reading_progress")).rows.length, 0);
 await db.close();

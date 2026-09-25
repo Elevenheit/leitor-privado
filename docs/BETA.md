@@ -24,7 +24,7 @@ Veja também a [sequência documentada de migrations](MIGRATIONS.md), que distin
 
 `supabase/schema.sql` é o baseline histórico anterior ao beta, não representa sozinho o estado atual e não deve ser tratado como snapshot completo.
 
-**Banco existente no estado do main:** confirme as migrações anteriores; execute `005_closed_beta.sql` uma vez, em transação, e depois `006_visible_series_comments.sql`. Não execute novamente uma migração já aplicada. O erro aborta a transação corrente, sem aplicação parcial.
+**Banco existente no estado do main:** confirme as migrações anteriores; execute `005_closed_beta.sql` uma vez, em transação, promova a conta administrativa e depois aplique `006_visible_series_comments.sql` e `007_storage_visibility.sql`. Não execute novamente uma migração já aplicada. O erro aborta a transação corrente, sem aplicação parcial.
 
 **Projeto vazio de teste:**
 
@@ -36,9 +36,10 @@ Veja também a [sequência documentada de migrations](MIGRATIONS.md), que distin
 6. Execute `supabase/migrations/005_closed_beta.sql`.
 7. Promova a conta administrativa conforme `docs/ADMIN-BOOTSTRAP.md`.
 8. Execute `supabase/migrations/006_visible_series_comments.sql`.
-9. Execute novamente `supabase/verify-preservation.sql`. Compare contagens, caminhos, progresso e marcadores com a captura anterior. Confira a cópia dos favoritos antigos na tabela `favorites`.
+9. Execute `supabase/migrations/007_storage_visibility.sql`.
+10. Execute novamente `supabase/verify-preservation.sql`. Compare contagens, caminhos, progresso e marcadores com a captura anterior. Confira a cópia dos favoritos antigos na tabela `favorites`.
 
-A 005 preserva `owner_id` como autoria do catálogo e os caminhos existentes. Converte a chave do progresso para `(owner_id, book_id)`, copia favoritos e substitui as policies antigas. A função `is_private_owner()` fica legada, sem uso nas novas policies. O catálogo é administrado por `beta_access.role`, nunca por user metadata. Perfis privados e uma view limitada de identidade impedem expor bio/preferências/email aos outros usuários. Uma conta pode consultar apenas suas próprias permissões e não pode atribuir a si mesma papel administrativo. A 006 restringe leitura e colaboração em comentários a obras liberadas; execute-a depois da 005 em bancos já migrados.
+A 005 preserva `owner_id` como autoria do catálogo e os caminhos existentes. Converte a chave do progresso para `(owner_id, book_id)`, copia favoritos e substitui as policies antigas. A função `is_private_owner()` fica legada, sem uso nas novas policies. O catálogo é administrado por `beta_access.role`, nunca por user metadata. Perfis privados e uma view limitada de identidade impedem expor bio/preferências/email aos outros usuários. Uma conta pode consultar apenas suas próprias permissões e não pode atribuir a si mesma papel administrativo. A 006 restringe leitura e colaboração em comentários a obras liberadas. A 007 restringe leitura do Storage a arquivos referenciados por obras publicadas e a buckets privados.
 
 As policies de Storage removidas são as antigas com prefixo `Owner `; revise policies adicionais personalizadas antes de aplicar. O teste local cobre somente as policies versionadas. Buckets permanecem privados. URLs assinadas duram uma hora: revogar acesso impede novas URLs, mas não cancela imediatamente URLs já emitidas nem arquivos já baixados.
 

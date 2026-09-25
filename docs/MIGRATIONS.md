@@ -10,10 +10,11 @@ As migrations versionadas e os arquivos SQL de bootstrap são a referência para
 4. `supabase/migrations/005_closed_beta.sql` instala acesso fechado, perfis, publicação, favoritos, comentários e policies do beta; também preserva e transforma dados anteriores.
 5. Promova uma conta Auth de forma explícita seguindo [ADMIN-BOOTSTRAP.md](ADMIN-BOOTSTRAP.md).
 6. `supabase/migrations/006_visible_series_comments.sql` corrige o acesso a comentários para seguir a visibilidade da obra.
+7. `supabase/migrations/007_storage_visibility.sql` faz a leitura de mídia privada seguir a publicação da obra e mantém objetos sem referência indisponíveis aos leitores.
 
 ## Banco no estado anterior ao beta
 
-Confirme que o banco já tem o baseline, a migration 002 e a 004. Faça backup; execute a 005 uma única vez, promova a conta administradora conforme o procedimento acima e aplique a 006. A 005 transforma a chave e os dados de progresso, copia favoritos, cria perfis e substitui policies; não é uma migration segura para repetição. A 006 é uma correção pequena, separada para limitar as policies de comentário às obras visíveis.
+Confirme que o banco já tem o baseline, a migration 002 e a 004. Faça backup; execute a 005 uma única vez, promova a conta administradora conforme o procedimento acima e aplique as migrations 006 e 007. A 005 transforma a chave e os dados de progresso, copia favoritos, cria perfis e substitui policies; não é uma migration segura para repetição. As correções 006 e 007 limitam comentários e mídia privada às obras visíveis.
 
 ## Alterações futuras
 

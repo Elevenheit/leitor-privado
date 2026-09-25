@@ -7,6 +7,7 @@ Data: 25/09/2026. Branch: `feat/nook-closed-beta`; base: `origin/main` (`1a019c1
 - Migração 006 restringe leitura, criação, edição, exclusão e denúncias de comentários às obras liberadas. O teste PostgreSQL local cobre tentativa de ler, comentar e denunciar comentários numa obra oculta.
 - A sequência de bootstrap e upgrade 005/006 está documentada em `docs/MIGRATIONS.md`; migrations históricas não foram reescritas e nenhum banco remoto foi alterado.
 - `supabase/schema.sql` está identificado como baseline histórico pré-beta; `docs/MIGRATIONS.md` descreve os arquivos necessários para chegar ao schema atual.
+- Testes RLS locais cobrem isolamento entre leitores para progresso, favoritos, marcadores e perfis; convite, expiração/revogação, publicação de catálogo, autoria/moderação de comentários e leitura de Storage. A migration 007 impede que mídia de obras ocultas ou objetos sem referência sejam lidos por leitores.
 
 - Migração PostgreSQL executada em PGlite com schemas Auth/Storage mínimos de teste, RLS real, administrador e dois leitores. Cobre convite obrigatório, preservação de PDF/progresso/marcadores/favoritos, catálogo autorizado, independência do progresso, bloqueio de alterações alheias, proibição de autopromoção, Storage, comentários, spam, denúncia, moderação e expiração. **Não equivale a testar o serviço Supabase Auth.**
 - Regras de abertura: visível desde tempo zero, destinos 90/110 segundos, curta duração, desligada e desaparecimento após destino. Nenhum salto automático.
