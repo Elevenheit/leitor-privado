@@ -107,6 +107,26 @@ export function Catalog({
         ) : (
           <h1 className="sr-only">Início</h1>
         )}
+        <div className="catalog-topbar">
+          <label className="search catalog-search">
+            <Search size={17} aria-hidden="true" />
+            <input
+              aria-label={
+                format
+                  ? `Buscar em ${formats[format]}`
+                  : "Busca global de obras"
+              }
+              placeholder={
+                format ? `Buscar em ${formats[format]}...` : "Buscar no Nook"
+              }
+              value={q}
+              onChange={(e) => {
+                setQ(e.target.value);
+                setPage(0);
+              }}
+            />
+            </label>
+        </div>
         {!list && <RecentHistory userId={user.id} format={format} />}
         <section className="library-section">
           <div className="section-head catalog-section-head">
@@ -117,24 +137,6 @@ export function Catalog({
                   ? "Guardados por você"
                   : "Adicionados recentemente"}
             </h2>
-            <label className="search catalog-search">
-              <Search size={17} aria-hidden="true" />
-              <input
-                aria-label={
-                  format
-                    ? `Buscar em ${formats[format]}`
-                    : "Busca global de obras"
-                }
-                placeholder={
-                  format ? `Buscar em ${formats[format]}...` : "Buscar no Nook"
-                }
-                value={q}
-                onChange={(e) => {
-                  setQ(e.target.value);
-                  setPage(0);
-                }}
-              />
-            </label>
           </div>
           {error && (
             <p className="error" role="alert">

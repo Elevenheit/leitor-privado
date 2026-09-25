@@ -20,7 +20,7 @@ export function naturalPages(names: string[]) {
   return names
     .filter(
       (n) =>
-        /\.(png|jpe?g)$/i.test(n) &&
+        /\.(png|jpe?g|webp)$/i.test(n) &&
         !n.startsWith("__MACOSX/") &&
         !n.split("/").some((p) => p.startsWith(".")),
     )
@@ -32,6 +32,8 @@ export const CBZ_LIMITS = {
   total: 160 * 1024 * 1024,
   pages: 400,
 };
+export const MAX_RENDER_PIXELS = 16_000_000;
+export const HARD_SOURCE_PIXELS = 50_000_000;
 
 // Read dimensions before asking the browser to decode potentially huge images.
 export function validateComicImage(data: Uint8Array) {
@@ -70,16 +72,26 @@ export function validateComicImage(data: Uint8Array) {
       }
       offset += size;
     }
+  } else if (data.length >= 30 && data[0] === 82 && data[1] === 73 && data[2] === 70 && data[3] === 70 && data[8] === 87 && data[9] === 69 && data[10] === 66 && data[11] === 80) {
+    const chunk = String.fromCharCode(data[12], data[13], data[14], data[15]);
+    if (chunk === "VP8X") {
+      width = 1 + data[24] + (data[25] << 8) + (data[26] << 16);
+      height = 1 + data[27] + (data[28] << 8) + (data[29] << 16);
+    } else if (chunk === "VP8 " && data[23] === 157 && data[24] === 1 && data[25] === 42) {
+      width = (data[26] | (data[27] << 8)) & 0x3fff;
+      height = (data[28] | (data[29] << 8)) & 0x3fff;
+    } else if (chunk === "VP8L" && data[20] === 47) {
+      width = 1 + data[21] + ((data[22] & 0x3f) << 8);
+      height = 1 + ((data[22] & 0xc0) >> 6) + (data[23] << 2) + ((data[24] & 0x0f) << 10);
+    }
   }
   if (
     !width ||
     !height ||
-    width > 16000 ||
-    height > 16000 ||
-    width * height > 16000000
+    width > 30000 ||
+    height > 30000 ||
+    width * height > HARD_SOURCE_PIXELS
   )
-    throw Error(
-      "Página inválida ou acima de 16 megapixels. Use JPEG ou PNG menor.",
-    );
+    throw Error("Página inválida ou com dimensões acima do limite seguro de 50 megapixels.");
   return { width, height };
 }

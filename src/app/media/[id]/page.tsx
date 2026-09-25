@@ -152,11 +152,11 @@ function Media({ id, user }: { id: string; user: User }) {
               ready.current = true;
               setStatus("CBZ aberto.");
             } else {
-              const mime = /\.png$/i.test(e.data.name)
+              const mime = e.data.mime || (/\.png$/i.test(e.data.name)
                 ? "image/png"
                 : /\.webp$/i.test(e.data.name)
                   ? "image/webp"
-                  : "image/jpeg";
+                  : "image/jpeg");
               const url = URL.createObjectURL(
                 new Blob([e.data.data], { type: mime }),
               );
@@ -221,6 +221,7 @@ function Media({ id, user }: { id: string; user: User }) {
   useEffect(() => {
     if (!count) return;
     function key(e: KeyboardEvent) {
+      if (webtoon) return;
       if ((e.target as HTMLElement).matches("input,select,textarea,button"))
         return;
       if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
@@ -235,7 +236,7 @@ function Media({ id, user }: { id: string; user: User }) {
     }
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [count, rtl, save]);
+  }, [count, rtl, save, webtoon]);
   function move(n: number) {
     const p = Math.max(0, Math.min(count - 1, n));
     setPage(p);
@@ -249,7 +250,6 @@ function Media({ id, user }: { id: string; user: User }) {
     duration,
     time,
   );
-  const [visiblePages, setVisiblePages] = useState<Record<number, boolean>>({});
   webtoonRef.current = webtoon;
   const pageElements = useRef<Record<number, HTMLDivElement | null>>({});
   useEffect(() => {
@@ -259,8 +259,8 @@ function Media({ id, user }: { id: string; user: User }) {
         const index = Number((entry.target as HTMLElement).dataset.pageIndex);
         if (entry.isIntersecting) {
           const area = imageArea.current;
-          const candidates = Object.entries(pageElements.current).filter(([, node]) => node && node.getBoundingClientRect().bottom > (area?.getBoundingClientRect().top || 0) && node.getBoundingClientRect().top < (area?.getBoundingClientRect().bottom || innerHeight));
-          const center = (area?.getBoundingClientRect().top || 0) + (area?.clientHeight || innerHeight) / 2;
+          const candidates = Object.entries(pageElements.current).filter(([, node]) => node && node.getBoundingClientRect().bottom > 0 && node.getBoundingClientRect().top < innerHeight);
+          const center = innerHeight / 2;
           const current = candidates.sort((a, b) => Math.abs((a[1]?.getBoundingClientRect().top || 0) - center) - Math.abs((b[1]?.getBoundingClientRect().top || 0) - center))[0];
           const activeIndex = current ? Number(current[0]) : index;
           pageRef.current = activeIndex;
@@ -274,21 +274,42 @@ function Media({ id, user }: { id: string; user: User }) {
           if (Date.now() - lastSave.current > 1500) {
             lastSave.current = Date.now();
             const el = area;
-            void save(0, index, index === count - 1, el ? el.scrollTop / Math.max(1, el.scrollHeight - el.clientHeight) : 0);
+            const top = el ? el.getBoundingClientRect().top + window.scrollY : 0;
+            const ratio = el ? (window.scrollY - top) / Math.max(1, el.scrollHeight - window.innerHeight) : 0;
+            void save(0, activeIndex, activeIndex === count - 1, ratio);
           }
         }
       }
-    }, { root: imageArea.current, rootMargin: "1200px 0px", threshold: 0.01 });
+    }, { root: null, rootMargin: "1200px 0px", threshold: 0.01 });
     Object.values(pageElements.current).forEach((element) => { if (element) observer.observe(element); });
     return () => observer.disconnect();
   }, [webtoon, count, save]);
   useEffect(() => {
-    if (!webtoon || !count || !imageArea.current || !scrollRestore.current) return;
+    if (!webtoon || !count) return;
+    const handleScroll = () => {
+      const area = imageArea.current;
+      if (!area) return;
+      const candidates = Object.entries(pageElements.current).filter(([, node]) => node && node.getBoundingClientRect().bottom > 0 && node.getBoundingClientRect().top < innerHeight);
+      const current = candidates.sort((a, b) => Math.abs((a[1]?.getBoundingClientRect().top || 0) - innerHeight / 2) - Math.abs((b[1]?.getBoundingClientRect().top || 0) - innerHeight / 2))[0];
+      if (!current) return;
+      const activeIndex = Number(current[0]);
+      pageRef.current = activeIndex;
+      setPage(activeIndex);
+      if (Date.now() - lastSave.current <= 1500) return;
+      lastSave.current = Date.now();
+      const top = area.getBoundingClientRect().top + window.scrollY;
+      const ratio = (window.scrollY - top) / Math.max(1, area.scrollHeight - window.innerHeight);
+      void save(0, activeIndex, activeIndex === count - 1, ratio);
+    };
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, [webtoon, count, save]);
+  useEffect(() => {
+    if (!webtoon || !count || !imageArea.current) return;
     const el = imageArea.current;
     requestAnimationFrame(() => {
-      const target = pageElements.current[pageRef.current];
-      if (target) target.scrollIntoView({ block: "start" });
-      else el.scrollTop = scrollRestore.current * Math.max(0, el.scrollHeight - el.clientHeight);
+      const top = el.getBoundingClientRect().top + window.scrollY;
+      window.scrollTo(0, top + scrollRestore.current * Math.max(0, el.scrollHeight - window.innerHeight));
       scrollRestore.current = 0;
     });
   }, [webtoon, count]);
@@ -384,7 +405,7 @@ function Media({ id, user }: { id: string; user: User }) {
                   <option value="vertical">Rolagem vertical</option>
                 </select>
               </label>
-              <label>
+              {!webtoon && <label>
                 Direção
                 <select
                   value={rtl ? "rtl" : "ltr"}
@@ -393,7 +414,7 @@ function Media({ id, user }: { id: string; user: User }) {
                   <option value="ltr">Esquerda → direita</option>
                   <option value="rtl">Direita → esquerda</option>
                 </select>
-              </label>
+              </label>}
               <label>
                 Ajuste
                 <select value={fit} onChange={(e) => setFit(e.target.value)}>
@@ -461,7 +482,6 @@ function Media({ id, user }: { id: string; user: User }) {
                       const image = e.currentTarget;
                       const container = image.parentElement;
                       if (container) container.style.aspectRatio = `${image.naturalWidth} / ${image.naturalHeight}`;
-                      if (image.naturalWidth * image.naturalHeight > 24000000) setError("Imagem acima de 24 megapixels. Reexporte o capÃ­tulo em resoluÃ§Ã£o menor.");
                     }} /> : <span>Carregando pÃ¡ginaâ€¦</span>}
                   </div>
                 ) : images[i] ? (
@@ -471,16 +491,6 @@ function Media({ id, user }: { id: string; user: User }) {
                       alt={`Página ${i + 1}`}
                       style={{ width: `${zoom}%` }}
                       onLoad={(e) => {
-                        if (
-                          e.currentTarget.naturalWidth *
-                            e.currentTarget.naturalHeight >
-                          24000000
-                        ) {
-                          setError(
-                            "Imagem acima de 24 megapixels. Reexporte o capítulo em resolução menor.",
-                          );
-                          return;
-                        }
                         if (
                           i === page &&
                           scrollRestore.current &&
