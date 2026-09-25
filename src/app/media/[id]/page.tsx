@@ -9,6 +9,7 @@ import { Nav } from "@/components/nav";
 import { supabase, BUCKET } from "@/lib/supabase";
 import { introTarget, CBZ_LIMITS } from "@/lib/media-rules";
 import type { Book } from "@/lib/types";
+import type { Format } from "@/lib/catalog";
 import { mediaHref } from "@/lib/catalog";
 export default function Page() {
   const { id } = useParams<{ id: string }>();
@@ -16,6 +17,8 @@ export default function Page() {
 }
 function Media({ id, user }: { id: string; user: User }) {
   const [book, setBook] = useState<Book | null>(null);
+  const [seriesFormat, setSeriesFormat] = useState<Format | null>(null);
+  const webtoon = book?.media_type === "cbz" && (seriesFormat === "manga" || seriesFormat === "manhwa");
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
   const [status, setStatus] = useState("Abrindo mídia…");
@@ -34,6 +37,8 @@ function Media({ id, user }: { id: string; user: User }) {
   const restore = useRef(0);
   const lastSave = useRef(0);
   const objectUrls = useRef<Record<number, string>>({});
+  const requestedPages = useRef(new Set<number>());
+  const webtoonRef = useRef(false);
   const pageRef = useRef(0);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
   const ready = useRef(false);
@@ -84,6 +89,11 @@ function Media({ id, user }: { id: string; user: User }) {
         if (!live) return;
         const item = b.data as Book;
         setBook(item);
+        if (item.series_id) {
+          const series = await api.from("series").select("format").eq("id", item.series_id).maybeSingle();
+          if (series.error) throw Error("NÃ£o foi possÃ­vel carregar o formato da obra.");
+          if (live) setSeriesFormat((series.data?.format as Format | null) || null);
+        }
         restore.current = p.data?.position_seconds || 0;
         scrollRestore.current = p.data?.scroll_ratio || 0;
         pageRef.current = Math.max(0, (p.data?.page_number || 1) - 1);
@@ -151,7 +161,8 @@ function Media({ id, user }: { id: string; user: User }) {
                 new Blob([e.data.data], { type: mime }),
               );
               const index = e.data.index;
-              if (Math.abs(index - pageRef.current) > 1) {
+              requestedPages.current.delete(index);
+              if (Math.abs(index - pageRef.current) > (webtoonRef.current ? 7 : 1)) {
                 URL.revokeObjectURL(url);
                 return;
               }
@@ -192,16 +203,21 @@ function Media({ id, user }: { id: string; user: User }) {
   useEffect(() => {
     pageRef.current = page;
     if (!count) return;
+    const windowSize = webtoon ? 6 : 1;
     for (const key of Object.keys(objectUrls.current)) {
       const i = Number(key);
-      if (Math.abs(i - page) > 1) {
+      if (Math.abs(i - page) > windowSize) {
         URL.revokeObjectURL(objectUrls.current[i]);
         delete objectUrls.current[i];
       }
     }
-    for (let i = Math.max(0, page - 1); i <= Math.min(count - 1, page + 1); i++)
-      if (!objectUrls.current[i]) worker.current?.postMessage({ index: i });
-  }, [page, count]);
+    for (let i = Math.max(0, page - windowSize); i <= Math.min(count - 1, page + windowSize); i++) {
+      if (!objectUrls.current[i] && !requestedPages.current.has(i)) {
+        requestedPages.current.add(i);
+        worker.current?.postMessage({ index: i });
+      }
+    }
+  }, [page, count, webtoon]);
   useEffect(() => {
     if (!count) return;
     function key(e: KeyboardEvent) {
@@ -233,6 +249,49 @@ function Media({ id, user }: { id: string; user: User }) {
     duration,
     time,
   );
+  const [visiblePages, setVisiblePages] = useState<Record<number, boolean>>({});
+  webtoonRef.current = webtoon;
+  const pageElements = useRef<Record<number, HTMLDivElement | null>>({});
+  useEffect(() => {
+    if (!webtoon || !count) return;
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        const index = Number((entry.target as HTMLElement).dataset.pageIndex);
+        if (entry.isIntersecting) {
+          const area = imageArea.current;
+          const candidates = Object.entries(pageElements.current).filter(([, node]) => node && node.getBoundingClientRect().bottom > (area?.getBoundingClientRect().top || 0) && node.getBoundingClientRect().top < (area?.getBoundingClientRect().bottom || innerHeight));
+          const center = (area?.getBoundingClientRect().top || 0) + (area?.clientHeight || innerHeight) / 2;
+          const current = candidates.sort((a, b) => Math.abs((a[1]?.getBoundingClientRect().top || 0) - center) - Math.abs((b[1]?.getBoundingClientRect().top || 0) - center))[0];
+          const activeIndex = current ? Number(current[0]) : index;
+          pageRef.current = activeIndex;
+          setPage(activeIndex);
+          for (let i = Math.max(0, activeIndex - 6); i <= Math.min(count - 1, activeIndex + 6); i++) {
+            if (!objectUrls.current[i] && !requestedPages.current.has(i)) {
+              requestedPages.current.add(i);
+              worker.current?.postMessage({ index: i });
+            }
+          }
+          if (Date.now() - lastSave.current > 1500) {
+            lastSave.current = Date.now();
+            const el = area;
+            void save(0, index, index === count - 1, el ? el.scrollTop / Math.max(1, el.scrollHeight - el.clientHeight) : 0);
+          }
+        }
+      }
+    }, { root: imageArea.current, rootMargin: "1200px 0px", threshold: 0.01 });
+    Object.values(pageElements.current).forEach((element) => { if (element) observer.observe(element); });
+    return () => observer.disconnect();
+  }, [webtoon, count, save]);
+  useEffect(() => {
+    if (!webtoon || !count || !imageArea.current || !scrollRestore.current) return;
+    const el = imageArea.current;
+    requestAnimationFrame(() => {
+      const target = pageElements.current[pageRef.current];
+      if (target) target.scrollIntoView({ block: "start" });
+      else el.scrollTop = scrollRestore.current * Math.max(0, el.scrollHeight - el.clientHeight);
+      scrollRestore.current = 0;
+    });
+  }, [webtoon, count]);
   return (
     <>
       <Nav back />
@@ -302,7 +361,7 @@ function Media({ id, user }: { id: string; user: User }) {
           </>
         ) : count > 0 ? (
           <>
-            <div className="media-controls">
+            {!webtoon && <div className="media-controls">
               <button onClick={() => move(page - 1)} disabled={!page}>
                 ← Anterior
               </button>
@@ -353,10 +412,10 @@ function Media({ id, user }: { id: string; user: User }) {
                   onChange={(e) => setZoom(Number(e.target.value))}
                 />
               </label>
-            </div>
+            </div>}
             <div
               ref={imageArea}
-              className={`comic-pages ${fit}`}
+              className={`comic-pages ${webtoon ? "webtoon-pages" : fit}`}
               onTouchStart={(e) => {
                 if (e.touches.length === 1)
                   touchStart.current = {
@@ -369,7 +428,7 @@ function Media({ id, user }: { id: string; user: User }) {
                 const start = touchStart.current;
                 touchStart.current = null;
                 if (
-                  !start ||
+                  !start || webtoon ||
                   vertical ||
                   zoom > 100 ||
                   e.changedTouches.length !== 1
@@ -381,7 +440,7 @@ function Media({ id, user }: { id: string; user: User }) {
                   move(page + (dx < 0 ? 1 : -1) * (rtl ? -1 : 1));
               }}
               onScroll={(e) => {
-                if (Date.now() - lastSave.current > 1500) {
+                if (!webtoon && Date.now() - lastSave.current > 1500) {
                   lastSave.current = Date.now();
                   const el = e.currentTarget;
                   void save(
@@ -394,10 +453,18 @@ function Media({ id, user }: { id: string; user: User }) {
                 }
               }}
             >
-              {(vertical ? [page, Math.min(page + 1, count - 1)] : [page])
+              {(webtoon ? Array.from({ length: count }, (_, i) => i) : vertical ? [page, Math.min(page + 1, count - 1)] : [page])
                 .filter((x, i, a) => a.indexOf(x) === i)
-                .map((i) =>
-                  images[i] ? (
+                .map((i) => webtoon ? (
+                  <div key={i} data-page-index={i} ref={(element) => { pageElements.current[i] = element; }} className="webtoon-page" style={{ aspectRatio: "0.72", maxWidth: "100%" }}>
+                    {images[i] ? <img src={images[i]} alt={`PÃ¡gina ${i + 1}`} onLoad={(e) => {
+                      const image = e.currentTarget;
+                      const container = image.parentElement;
+                      if (container) container.style.aspectRatio = `${image.naturalWidth} / ${image.naturalHeight}`;
+                      if (image.naturalWidth * image.naturalHeight > 24000000) setError("Imagem acima de 24 megapixels. Reexporte o capÃ­tulo em resoluÃ§Ã£o menor.");
+                    }} /> : <span>Carregando pÃ¡ginaâ€¦</span>}
+                  </div>
+                ) : images[i] ? (
                     <img
                       key={i}
                       src={images[i]}
@@ -432,13 +499,13 @@ function Media({ id, user }: { id: string; user: User }) {
                   ),
                 )}
             </div>
-            <button
+            {!webtoon && <button
               className="primary-button"
               disabled={page === count - 1}
               onClick={() => move(page + 1)}
             >
               Continuar →
-            </button>
+            </button>}
           </>
         ) : null}
         <p role="status" className="muted">

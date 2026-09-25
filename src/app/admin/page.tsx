@@ -32,6 +32,7 @@ import {
   type Series,
   type Volume,
 } from "@/lib/types";
+import type { Format } from "@/lib/catalog";
 
 export default function Home() {
   return (
@@ -66,6 +67,7 @@ function Dashboard({ user }: { user: User }) {
   const [coverUrls, setCoverUrls] = useState<Record<string, string>>({});
   const [newTitle, setNewTitle] = useState("");
   const [newDescription, setNewDescription] = useState("");
+  const [newFormat, setNewFormat] = useState<Format>("novel");
   const [selectedSeries, setSelectedSeries] = useState("");
   const [selectedVolume, setSelectedVolume] = useState("");
   const [chapterNumber, setChapterNumber] = useState("");
@@ -73,7 +75,10 @@ function Dashboard({ user }: { user: User }) {
   const [contentType, setContentType] = useState<"chapter" | "volume">(
     "chapter",
   );
+  const [skipIntro, setSkipIntro] = useState(false);
+  const [introEnd, setIntroEnd] = useState(90);
   const [inlineSeriesTitle, setInlineSeriesTitle] = useState("");
+  const [inlineSeriesFormat, setInlineSeriesFormat] = useState<Format>("novel");
   const [inlineVolumeNumber, setInlineVolumeNumber] = useState("");
   const [inlineVolumeTitle, setInlineVolumeTitle] = useState("");
   const [createSeriesInline, setCreateSeriesInline] = useState(false);
@@ -156,6 +161,7 @@ function Dashboard({ user }: { user: User }) {
     owner_id: user.id,
     title,
     description: newDescription.trim() || null,
+    format: newFormat,
     beta_visible: true,
   })
   .select()
@@ -195,6 +201,7 @@ function Dashboard({ user }: { user: User }) {
       }
       setNewTitle("");
       setNewDescription("");
+      setNewFormat("novel");
       setCoverFile(null);
       setShowCreate(false);
       await load();
@@ -210,6 +217,7 @@ function Dashboard({ user }: { user: User }) {
   .insert({
     owner_id: user.id,
     title,
+    format: inlineSeriesFormat,
     beta_visible: true,
   })
   .select()
@@ -220,6 +228,7 @@ function Dashboard({ user }: { user: User }) {
       setSelectedSeries(data.id);
       setCreateSeriesInline(false);
       setInlineSeriesTitle("");
+      setInlineSeriesFormat("novel");
     }
   }
 
@@ -313,18 +322,28 @@ function Dashboard({ user }: { user: User }) {
   }
 
   async function uploadFile() {
-    if (!file || uploading) return;
+    if (!file || uploading || !selectedSeries || !selectedFormat) return;
     setError("");
-    if (!file.name.toLowerCase().endsWith(".pdf")) {
+    const extension = file.name.split(".").pop()?.toLowerCase() || "";
+    const mediaType = selectedFormat === "novel" ? "pdf" : selectedFormat === "anime" ? "video" : "cbz";
+    if (mediaType === "pdf" && extension !== "pdf") {
       setError("Escolha um arquivo PDF.");
       return;
     }
+    if (mediaType === "pdf") {
     const signature = new TextDecoder().decode(
       await file.slice(0, 5).arrayBuffer(),
     );
     if (signature !== "%PDF-") {
       setError("Este arquivo não parece ser um PDF válido.");
       return;
+    }
+    } else {
+      const bytes = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+      if (mediaType === "cbz" && (extension !== "cbz" || file.size > 40 * 1024 * 1024 || bytes[0] !== 80 || bytes[1] !== 75)) { setError("Use um arquivo CBZ ZIP válido de até 40 MB."); return; }
+      if (mediaType === "video" && (!(["mp4", "webm"].includes(extension)) || file.size > 500 * 1024 * 1024)) { setError("Use MP4 ou WebM de até 500 MB."); return; }
+      if (mediaType === "video" && extension === "mp4" && new TextDecoder().decode(bytes.slice(4, 8)) !== "ftyp") { setError("MP4 inválido."); return; }
+      if (mediaType === "video" && extension === "webm" && !(bytes[0] === 26 && bytes[1] === 69 && bytes[2] === 223 && bytes[3] === 163)) { setError("WebM inválido."); return; }
     }
     const api = supabase();
     const {
@@ -334,12 +353,12 @@ function Dashboard({ user }: { user: User }) {
       setError("Sua sessão expirou. Entre novamente.");
       return;
     }
-    const path = `${user.id}/${selectedSeries || "unfiled"}/${selectedVolume || "unassigned"}/${crypto.randomUUID()}.pdf`;
+    const path = `${user.id}/${selectedSeries}/${selectedVolume || "unassigned"}/${crypto.randomUUID()}.${extension}`;
     const endpoint = `${process.env.NEXT_PUBLIC_SUPABASE_URL!.replace(/\/$/, "")}/storage/v1/upload/resumable`;
     setUploading(true);
     setUploadPercent(0);
     try {
-      await new Promise<void>((resolve, reject) => {
+      if (mediaType === "pdf") await new Promise<void>((resolve, reject) => {
         const upload = new Upload(file, {
           endpoint,
           headers: { authorization: `Bearer ${session.access_token}` },
@@ -366,6 +385,11 @@ function Dashboard({ user }: { user: User }) {
           })
           .catch(reject);
       });
+      else {
+        const objectType = mediaType === "cbz" ? "application/zip" : extension === "mp4" ? "video/mp4" : "video/webm";
+        const uploaded = await api.storage.from(BUCKET).upload(path, file, { contentType: objectType });
+        if (uploaded.error) throw uploaded.error;
+      }
       const { error: insertError } = await api.from("books").insert({
         owner_id: user.id,
         title:
@@ -385,6 +409,9 @@ function Dashboard({ user }: { user: User }) {
           ? Math.round(Number(chapterNumber) * 1000)
           : 0,
         content_type: contentType,
+        media_type: mediaType,
+        skip_intro: mediaType === "video" && skipIntro,
+        intro_end: introEnd,
       });
       if (insertError) {
         await api.storage.from(BUCKET).remove([path]);
@@ -505,6 +532,10 @@ function Dashboard({ user }: { user: User }) {
         )
       : 0;
   const relevantVolumes = volumes.filter((v) => v.series_id === selectedSeries);
+  const selectedSeriesData = series.find((item) => item.id === selectedSeries);
+  const selectedFormat = selectedSeriesData?.format || null;
+  const formatLabel = selectedFormat === "novel" ? "Light Novel" : selectedFormat === "manga" ? "Mangá" : selectedFormat === "manhwa" ? "Manhwa" : selectedFormat === "anime" ? "Anime" : "";
+  const acceptedMedia = selectedFormat === "novel" ? ".pdf,application/pdf" : selectedFormat === "manga" || selectedFormat === "manhwa" ? ".cbz,application/zip,application/vnd.comicbook+zip" : selectedFormat === "anime" ? ".mp4,.webm,video/mp4,video/webm" : undefined;
 
   return (
     <>
@@ -853,6 +884,15 @@ function Dashboard({ user }: { user: User }) {
                 />
               </label>
               <label>
+                Tipo da obra
+                <select value={newFormat} onChange={(e) => setNewFormat(e.target.value as Format)}>
+                  <option value="novel">Light Novel</option>
+                  <option value="manga">Mangá</option>
+                  <option value="manhwa">Manhwa</option>
+                  <option value="anime">Anime</option>
+                </select>
+              </label>
+              <label>
                 Descrição opcional
                 <textarea
                   value={newDescription}
@@ -901,7 +941,7 @@ function Dashboard({ user }: { user: User }) {
                 <X size={19} />
               </button>
               <span className="eyebrow">Acrescentar ao acervo</span>
-              <h2 id="upload-title">Enviar PDF</h2>
+              <h2 id="upload-title">Adicionar conteúdo</h2>
               <label>
                 Obra
                 <select
@@ -909,6 +949,7 @@ function Dashboard({ user }: { user: User }) {
                   onChange={(e) => {
                     setSelectedSeries(e.target.value);
                     setSelectedVolume("");
+                    setFile(null);
                   }}
                 >
                   <option value="">Sem coleção</option>
@@ -934,6 +975,12 @@ function Dashboard({ user }: { user: User }) {
                     value={inlineSeriesTitle}
                     onChange={(e) => setInlineSeriesTitle(e.target.value)}
                   />
+                  <select aria-label="Tipo da obra" value={inlineSeriesFormat} onChange={(e) => setInlineSeriesFormat(e.target.value as Format)}>
+                    <option value="novel">Light Novel</option>
+                    <option value="manga">Mangá</option>
+                    <option value="manhwa">Manhwa</option>
+                    <option value="anime">Anime</option>
+                  </select>
                   <button
                     type="button"
                     className="secondary-button"
@@ -995,8 +1042,13 @@ function Dashboard({ user }: { user: User }) {
                   )}
                 </>
               )}
-              <label>
-                Tipo do PDF
+              {selectedFormat && <p>Tipo: {formatLabel}</p>}
+              {selectedFormat === "anime" && <>
+                <label><span>Habilitar pular abertura</span><input type="checkbox" checked={skipIntro} onChange={(e) => setSkipIntro(e.target.checked)} /></label>
+                <label>Destino da abertura em segundos<input type="number" min="90" max="110" value={introEnd} onChange={(e) => setIntroEnd(Number(e.target.value))} /></label>
+              </>}
+              {selectedFormat === "novel" && <label>
+                Tipo do conteúdo
                 <select
                   value={contentType}
                   onChange={(e) =>
@@ -1006,7 +1058,7 @@ function Dashboard({ user }: { user: User }) {
                   <option value="chapter">Capítulo</option>
                   <option value="volume">Volume completo</option>
                 </select>
-              </label>
+              </label>}
               <div className="form-row">
                 <label>
                   Número do capítulo/volume
@@ -1027,11 +1079,12 @@ function Dashboard({ user }: { user: User }) {
                 </label>
               </div>
               <label className="file-picker">
-                Arquivo PDF
+                Arquivo
                 <input
                   ref={inputRef}
                   type="file"
-                  accept=".pdf,application/pdf"
+                  accept={acceptedMedia}
+                  disabled={!selectedSeries || uploading}
                   onChange={(e) => setFile(e.target.files?.[0] || null)}
                 />
               </label>
@@ -1045,13 +1098,13 @@ function Dashboard({ user }: { user: User }) {
                 onDrop={(e) => {
                   e.preventDefault();
                   setDragging(false);
-                  setFile(e.dataTransfer.files[0] || null);
+                  if (selectedSeries) setFile(e.dataTransfer.files[0] || null);
                 }}
               >
                 <UploadCloud size={19} />
                 {uploading
                   ? `Enviando… ${uploadPercent}%`
-                  : file?.name || "Arraste o PDF ou escolha acima"}
+                  : file?.name || (selectedFormat === "novel" ? "Arraste o PDF ou escolha acima" : selectedFormat === "anime" ? "Arraste o MP4/WebM ou escolha acima" : selectedFormat ? "Arraste o CBZ ou escolha acima" : "Selecione uma obra primeiro")}
                 {uploading && (
                   <div className="upload-track">
                     <div style={{ width: `${uploadPercent}%` }} />
@@ -1060,10 +1113,10 @@ function Dashboard({ user }: { user: User }) {
               </div>
               <button
                 className="primary-button"
-                disabled={!file || uploading}
+                disabled={!file || !selectedSeries || uploading}
                 onClick={() => void uploadFile()}
               >
-                {uploading ? "Enviando…" : "Enviar PDF"}
+                {uploading ? "Enviando…" : selectedFormat === "novel" ? "Enviar PDF" : selectedFormat === "anime" ? "Enviar episódio" : "Enviar capítulo"}
               </button>
             </section>
           </div>
