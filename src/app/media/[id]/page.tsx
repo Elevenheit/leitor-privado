@@ -9,6 +9,7 @@ import { Nav } from "@/components/nav";
 import { supabase, BUCKET } from "@/lib/supabase";
 import { saveReadingProgress } from "@/lib/data/progress";
 import { calculateReadingProgress, introTarget, CBZ_LIMITS } from "@/lib/media-rules";
+import { createPrivateMediaUrl, PRIVATE_MEDIA_URL_REFRESH_MARGIN_MS } from "@/lib/private-media-url";
 import type { Book } from "@/lib/types";
 import type { Format } from "@/lib/catalog";
 import { mediaHref } from "@/lib/catalog";
@@ -22,6 +23,7 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
   const [seriesFormat, setSeriesFormat] = useState<Format | null>(null);
   const webtoon = book?.media_type === "cbz" && (seriesFormat === "manga" || seriesFormat === "manhwa");
   const [url, setUrl] = useState("");
+  const [urlExpiresAt, setUrlExpiresAt] = useState(0);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("Abrindo mídia…");
   const [page, setPage] = useState(0);
@@ -36,6 +38,8 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
   const [next, setNext] = useState<Book | null>(null);
   const worker = useRef<Worker | null>(null);
   const video = useRef<HTMLVideoElement | null>(null);
+  const authRetryUrl = useRef<string | null>(null);
+  const resumeAfterUrlRefresh = useRef(false);
   const restore = useRef(0);
   const lastSave = useRef(0);
   const objectUrls = useRef<Record<number, string>>({});
@@ -78,6 +82,31 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
     },
     [book, count, duration, id, user.id],
   );
+  const renewPrivateUrl = useCallback(async (authorizationRetry = false) => {
+    if (!book || book.media_type !== "video" || !url) return false;
+    if (authorizationRetry && authRetryUrl.current === url) return false;
+    if (authorizationRetry) authRetryUrl.current = url;
+    const player = video.current;
+    restore.current = player?.currentTime || 0;
+    resumeAfterUrlRefresh.current = Boolean(player && !player.paused && !player.ended);
+    try {
+      const signed = await createPrivateMediaUrl(BUCKET, book.file_path);
+      if (signed.url === url) throw new Error("A URL privada nao foi renovada.");
+      setUrlExpiresAt(signed.expiresAt);
+      setUrl(signed.url);
+      return true;
+    } catch {
+      setUrlExpiresAt(0);
+      setError("NÃ£o foi possÃ­vel renovar o acesso ao vÃ­deo. Confira sua sessÃ£o.");
+      return false;
+    }
+  }, [book, url]);
+  useEffect(() => {
+    if (!url || !urlExpiresAt || book?.media_type !== "video") return;
+    const delay = Math.max(0, urlExpiresAt - Date.now() - PRIVATE_MEDIA_URL_REFRESH_MARGIN_MS);
+    const timer = setTimeout(() => void renewPrivateUrl(), delay);
+    return () => clearTimeout(timer);
+  }, [book?.media_type, renewPrivateUrl, url, urlExpiresAt]);
   useEffect(() => {
     const persist = (event?: Event) => {
       if (event?.type === "visibilitychange" && document.visibilityState !== "hidden") return;
@@ -131,21 +160,21 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
         scrollRestore.current = p.data?.scroll_ratio || 0;
         pageRef.current = Math.max(0, (p.data?.page_number ?? 1) - 1);
         setPage(pageRef.current);
-        const signed = await api.storage
-          .from(BUCKET)
-          .createSignedUrl(item.file_path, 3600);
-        if (signed.error || !signed.data)
-          throw Error("Não foi possível abrir o arquivo privado.");
+        const signed = await createPrivateMediaUrl(BUCKET, item.file_path);
         if (item.media_type === "video") {
-          setUrl(signed.data.signedUrl);
+          setUrlExpiresAt(signed.expiresAt);
+          setUrl(signed.url);
           ready.current = true;
           setStatus("Pronto para assistir.");
         } else if (item.media_type === "cbz") {
           if (item.size_bytes > CBZ_LIMITS.archive)
             throw Error("CBZ maior que 40 MB.");
-          const response = await fetch(signed.data.signedUrl, {
-            signal: controller.signal,
-          });
+          let mediaUrl = signed.url;
+          let response = await fetch(mediaUrl, { signal: controller.signal });
+          if (response.status === 401 || response.status === 403) {
+            mediaUrl = (await createPrivateMediaUrl(BUCKET, item.file_path)).url;
+            response = await fetch(mediaUrl, { signal: controller.signal });
+          }
           if (!response.ok)
             throw Error("Arquivo ausente ou conexão interrompida.");
           const reader = response.body?.getReader();
@@ -377,6 +406,10 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
                   Math.max(0, v.duration - 0.25),
                 );
                 setStatus("Pronto para assistir.");
+                if (resumeAfterUrlRefresh.current) {
+                  resumeAfterUrlRefresh.current = false;
+                  void v.play().catch(() => setStatus("Toque para retomar o video."));
+                }
               }}
               onTimeUpdate={(e) => {
                 const v = e.currentTarget;
@@ -393,11 +426,17 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
                 void save(e.currentTarget.currentTime, 0, e.currentTarget.ended)
               }
               onEnded={(e) => void save(e.currentTarget.duration, 0, true)}
-              onError={() =>
-                setError(
-                  "Vídeo ausente, acesso expirado ou formato incompatível. Reabra para renovar o acesso.",
-                )
-              }
+              onError={() => {
+                void (async () => {
+                  try {
+                    const response = await fetch(url, { method: "HEAD", cache: "no-store" });
+                    if ((response.status === 401 || response.status === 403) && await renewPrivateUrl(true)) return;
+                  } catch {
+                    // The player error remains visible if the authorization probe cannot run.
+                  }
+                  setError("Video ausente, acesso expirado ou formato incompativel. Reabra para renovar o acesso.");
+                })();
+              }}
               onPlaying={() => setStatus("Reproduzindo")}
             />
             {target !== null && (

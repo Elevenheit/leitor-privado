@@ -32,6 +32,7 @@ import {
 import { BUCKET, supabase } from "@/lib/supabase";
 import { saveReadingProgress } from "@/lib/data/progress";
 import { calculateReadingProgress } from "@/lib/media-rules";
+import { createPrivateMediaUrl, isPrivateMediaAuthorizationError, PRIVATE_MEDIA_URL_REFRESH_MARGIN_MS } from "@/lib/private-media-url";
 import { extractReadingBlocks, type ReadingBlock } from "@/lib/reader-text";
 import type {
   Book,
@@ -118,6 +119,7 @@ function Reader({ user, id }: { user: User; id: string }) {
   const [loadingPages, setLoadingPages] = useState<Set<number>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [urlGeneration, setUrlGeneration] = useState(0);
   const [error, setError] = useState("");
   const [saveState, setSaveState] = useState("Salvo");
   const [previousId, setPreviousId] = useState<string | null>(null);
@@ -202,10 +204,15 @@ function Reader({ user, id }: { user: User; id: string }) {
       if (version === saveVersion.current) setSaveState("Falha ao salvar");
     }
   }, [id, user.id, pages]);
+  const saveRef = useRef(save);
+  useEffect(() => {
+    saveRef.current = save;
+  }, [save]);
 
   useEffect(() => {
     let cancelled = false;
     let task: PDFDocumentLoadingTask | null = null;
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     async function init() {
       try {
         const api = supabase();
@@ -216,7 +223,7 @@ function Reader({ user, id }: { user: User; id: string }) {
         if (bookResult.error || !bookResult.data)
           throw new Error("Capítulo não encontrado ou sem acesso.");
         const current = bookResult.data as Book;
-        const [workResult, volumeResult, blobResult] = await Promise.all([
+        const [workResult, volumeResult, privateUrl] = await Promise.all([
           current.series_id
             ? api
                 .from("series")
@@ -231,25 +238,41 @@ function Reader({ user, id }: { user: User; id: string }) {
                 .eq("id", current.volume_id)
                 .maybeSingle()
             : Promise.resolve({ data: null, error: null }),
-          api.storage.from(BUCKET).createSignedUrl(current.file_path, 3600),
+          createPrivateMediaUrl(BUCKET, current.file_path),
         ]);
-        if (blobResult.error || !blobResult.data)
-          throw new Error(
-            blobResult.error?.message || "Não foi possível baixar o PDF.",
-          );
         const pdfjs = await import("pdfjs-dist");
         pdfjs.GlobalWorkerOptions.workerSrc = new URL(
           "pdfjs-dist/build/pdf.worker.min.mjs",
           import.meta.url,
         ).toString();
-        task = pdfjs.getDocument({
-          url: blobResult.data.signedUrl,
+        const openDocument = (url: string) => pdfjs.getDocument({
+          url,
           disableAutoFetch: true,
           disableStream: true,
           rangeChunkSize: 262144,
         });
-        const loaded = await task.promise;
+        let activePrivateUrl = privateUrl;
+        task = openDocument(activePrivateUrl.url);
+        let loaded: PDFDocumentProxy;
+        try {
+          loaded = await task.promise;
+        } catch (cause) {
+          if (!isPrivateMediaAuthorizationError(cause)) throw cause;
+          await task.destroy();
+          activePrivateUrl = await createPrivateMediaUrl(BUCKET, current.file_path);
+          task = openDocument(activePrivateUrl.url);
+          loaded = await task.promise;
+        }
         if (cancelled) return;
+        const refreshIn = Math.max(0, activePrivateUrl.expiresAt - Date.now() - PRIVATE_MEDIA_URL_REFRESH_MARGIN_MS);
+        refreshTimer = setTimeout(() => {
+          void saveRef.current().finally(() => {
+            if (!cancelled) {
+              setLoading(true);
+              setUrlGeneration((generation) => generation + 1);
+            }
+          });
+        }, refreshIn);
         const allUserProgress = (progressResult.data ||
           []) as ReadingProgress[];
         const saved = allUserProgress.find((item) => item.book_id === id);
@@ -372,10 +395,11 @@ function Reader({ user, id }: { user: User; id: string }) {
     void init();
     return () => {
       cancelled = true;
+      if (refreshTimer) clearTimeout(refreshTimer);
       readyRef.current = false;
       if (task) void task.destroy();
     };
-  }, [id, user.id, pages]);
+  }, [id, user.id, pages, urlGeneration]);
 
   useEffect(() => {
     const root = scrollRef.current;
