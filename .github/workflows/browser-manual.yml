@@ -1,0 +1,67 @@
+name: Browser checks (manual)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NOOK_TEST_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NOOK_TEST_ANON_KEY }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+          cache: npm
+
+      - name: Verify isolated test project secrets are configured
+        env:
+          TEST_URL: ${{ secrets.NOOK_TEST_URL }}
+          TEST_ANON_KEY: ${{ secrets.NOOK_TEST_ANON_KEY }}
+        run: |
+          test -n "$TEST_URL" || { echo "Set NOOK_TEST_URL in GitHub Actions secrets."; exit 1; }
+          test -n "$TEST_ANON_KEY" || { echo "Set NOOK_TEST_ANON_KEY in GitHub Actions secrets."; exit 1; }
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Build application
+        run: npm run build
+
+      - name: Start application
+        run: |
+          npm run start -- --hostname 127.0.0.1 -p 3100 > /tmp/nook-next.log 2>&1 &
+          echo $! > /tmp/nook-next.pid
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:3100/ > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          cat /tmp/nook-next.log
+          exit 1
+
+      - name: Run browser checks
+        run: npm run test:browser
+
+      - name: Upload browser artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nook-browser-artifacts
+          path: |
+            docs/screenshots/*.png
+            /tmp/nook-next.log
+          if-no-files-found: ignore
+          retention-days: 7
