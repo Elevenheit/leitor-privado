@@ -1,0 +1,25 @@
+name: Isolated authenticated E2E
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  e2e:
+    environment: isolated-beta
+    runs-on: ubuntu-latest
+    env:
+      NOOK_TEST_URL: ${{ secrets.NOOK_TEST_URL }}
+      NOOK_TEST_ANON_KEY: ${{ secrets.NOOK_TEST_ANON_KEY }}
+      NOOK_TEST_SERVICE_KEY: ${{ secrets.NOOK_TEST_SERVICE_KEY }}
+      NOOK_TEST_PROJECT_REF: ${{ secrets.NOOK_TEST_PROJECT_REF }}
+      NOOK_PRODUCTION_PROJECT_REF: ${{ secrets.NOOK_PRODUCTION_PROJECT_REF }}
+      NOOK_ALLOW_TEST_WRITES: isolated-beta-only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
