@@ -8,7 +8,7 @@
     "start": "next start --hostname 0.0.0.0",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "node tests/security.mjs && node --experimental-strip-types tests/media-rules.mjs && node --experimental-strip-types tests/batch-parser.mjs",
+    "test": "node tests/security.mjs && node --experimental-strip-types tests/media-rules.mjs && node --experimental-strip-types tests/batch-parser.mjs && node tests/upload-validation.mjs",
     "test:browser": "node tests/browser.mjs",
     "test:integration": "node tests/integration.mjs",
     "format": "prettier --write src tests"

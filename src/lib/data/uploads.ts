@@ -1,3 +1,4 @@
+import { validateStorageUpload } from "@/lib/upload-validation";
 import { Upload } from "tus-js-client";
 import { BUCKET, supabase } from "@/lib/supabase";
 import type { Book, Series } from "@/lib/types";
@@ -72,6 +73,7 @@ async function uploadResumable(file: File, path: string, contentType: string, on
 }
 
 export async function uploadStorageObject(bucket: StorageBucket, path: string, file: File, contentType: string, options: UploadOptions = {}) {
+  await validateStorageUpload(file, bucket);
   try {
     if (options.resumable) {
       if (bucket !== BUCKET) throw new DataError("Upload resumível só está habilitado no bucket de mídia.", "unknown");
