@@ -1,0 +1,10 @@
+import assert from "node:assert/strict";
+import { securityHeaders } from "../src/lib/security-headers.ts";
+const headers = Object.fromEntries(securityHeaders("https://isolated.example.test").map(h => [h.key, h.value]));
+assert.equal(headers["X-Content-Type-Options"], "nosniff");
+assert.equal(headers["X-Frame-Options"], "DENY");
+const csp = headers["Content-Security-Policy-Report-Only"];
+for (const source of ["https://isolated.example.test", "wss://isolated.example.test", "worker-src 'self' blob:", "media-src 'self' blob:", "frame-ancestors 'none'"]) assert.ok(csp.includes(source));
+assert.ok(!csp.includes("unsafe-eval"));
+assert.equal(headers["Content-Security-Policy"], undefined);
+console.log("PASS: HTTP policy allows private media/workers and starts CSP in Report-Only.");
