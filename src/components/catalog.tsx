@@ -1,11 +1,12 @@
 /* eslint-disable @next/next/no-img-element -- Private signed and blob URLs must stay in the browser, avoiding an image proxy. */
 "use client";
+import { listCatalogPage } from "@/lib/data/catalog";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { Search } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import { listFavoriteIds, setFavorite } from "@/lib/data/favorites";
+import { setFavorite } from "@/lib/data/favorites";
 import { toDataError } from "@/lib/data/errors";
 import { formats, type Format } from "@/lib/catalog";
 import type { Series } from "@/lib/types";
@@ -35,24 +36,12 @@ export function Catalog({
       setError("");
       try {
         const api = supabase();
-        const ids = await listFavoriteIds(user.id);
-        setFavs(ids);
-        let query = api
-          .from("series")
-          .select("id,title,description,cover_path,format,created_at")
-          .order("created_at", { ascending: false })
-          .order("id")
-          .range(page * 24, page * 24 + 23);
-        if (format) query = query.eq("format", format);
-        if (list) query = query.in("id", ids);
-        if (q.trim())
-          query = query.ilike("title", `%${q.trim().replace(/[%_]/g, "")}%`);
-        const r = await query;
-        if (r.error) throw r.error;
+        const result = await listCatalogPage({ ownerId: user.id, page, format, favoritesOnly: list, search: q });
         if (!live) return;
-        const rows = r.data as Series[];
+        const rows = result.items;
+        setFavs(result.favoriteIds);
         setItems(rows);
-        setMore(rows.length === 24);
+        setMore(result.hasMore);
         const c = await Promise.all(
           rows
             .filter((x) => x.cover_path)

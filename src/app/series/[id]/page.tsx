@@ -23,6 +23,7 @@ function Work({ id, user }: { id: string; user: User }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
   useEffect(() => {
     let live = true;
     async function load() {
@@ -37,7 +38,7 @@ function Work({ id, user }: { id: string; user: User }) {
             .order("sort_order")
             .order("chapter_number")
             .order("id")
-            .range(page * 100, page * 100 + 99),
+            .range(page * 100, page * 100 + 100),
           api
             .from("volumes")
             .select("id,owner_id,series_id,volume_number,title,description,sort_order,created_at,updated_at")
@@ -53,7 +54,8 @@ function Work({ id, user }: { id: string; user: User }) {
           : { data: [], error: null };
         if (p.error) throw p.error;
         setSeries(s.data as Series);
-        setBooks(b.data || []);
+        setBooks((b.data || []).slice(0, 100));
+        setHasMore((b.data || []).length > 100);
         setVolumes(v.data || []);
         setProgress(p.data || []);
         if (s.data.cover_path) {
@@ -166,7 +168,7 @@ function Work({ id, user }: { id: string; user: User }) {
                     Anterior
                   </button>
                   <button
-                    disabled={books.length < 100}
+                    disabled={!hasMore}
                     onClick={() => setPage(page + 1)}
                   >
                     Mais capítulos
