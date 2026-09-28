@@ -2,6 +2,8 @@
 import {
   calculateReadingProgress,
   comicPageAfterKey,
+  safeVideoPosition,
+  videoFailureMessage,
   introTarget,
   naturalPages,
   validateComicImage,
@@ -81,3 +83,10 @@ assert.equal(comicPageAfterKey(0, 400, "ArrowRight", false), 1);
 assert.equal(comicPageAfterKey(1, 400, "ArrowRight", true), 0);
 assert.equal(comicPageAfterKey(0, 400, "ArrowLeft", true), 1);
 assert.equal(comicPageAfterKey(399, 400, "ArrowRight", false), 399);
+
+assert.equal(safeVideoPosition(100, 20), 19.75);
+assert.equal(safeVideoPosition(42, Infinity), 42);
+assert.equal(safeVideoPosition(NaN, 120), 0);
+assert.equal(safeVideoPosition(-10, 120), 0);
+assert.match(videoFailureMessage(4), /codec/);
+assert.match(videoFailureMessage(2), /conexao/);

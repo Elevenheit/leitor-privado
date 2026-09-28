@@ -146,3 +146,13 @@ export function comicPageAfterKey(page: number, count: number, key: string, rtl:
   const delta = (key === "ArrowRight" ? 1 : key === "ArrowLeft" ? -1 : 0) * (rtl ? -1 : 1);
   return Math.max(0, Math.min(Math.max(0, count - 1), page + delta));
 }
+
+export function safeVideoPosition(position: number, duration: number) {
+  const seconds = Number.isFinite(position) ? Math.max(0, position) : 0;
+  return Number.isFinite(duration) && duration > 0 ? Math.min(seconds, Math.max(0, duration - 0.25)) : seconds;
+}
+export function videoFailureMessage(code: number | undefined) {
+  if (code === 3 || code === 4) return "Este navegador nao conseguiu decodificar o video. Tente outro navegador ou um arquivo MP4/WebM com codec compativel.";
+  if (code === 2) return "A conexao foi interrompida. Confira a rede e tente novamente.";
+  return "Nao foi possivel reproduzir o video. Confira o acesso e tente novamente.";
+}

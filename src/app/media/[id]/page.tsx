@@ -8,7 +8,7 @@ import { AuthGate } from "@/components/auth-gate";
 import { Nav } from "@/components/nav";
 import { supabase, BUCKET } from "@/lib/supabase";
 import { saveReadingProgress } from "@/lib/data/progress";
-import { calculateReadingProgress, introTarget, CBZ_LIMITS, comicPageAfterKey } from "@/lib/media-rules";
+import { calculateReadingProgress, introTarget, CBZ_LIMITS, comicPageAfterKey, safeVideoPosition, videoFailureMessage } from "@/lib/media-rules";
 import { createPrivateMediaUrl, PRIVATE_MEDIA_URL_REFRESH_MARGIN_MS } from "@/lib/private-media-url";
 import type { Book } from "@/lib/types";
 import type { Format } from "@/lib/catalog";
@@ -38,7 +38,8 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
   const [next, setNext] = useState<Pick<Book, "id" | "media_type"> | null>(null);
   const worker = useRef<Worker | null>(null);
   const video = useRef<HTMLVideoElement | null>(null);
-  const authRetryUrl = useRef<string | null>(null);
+  const authRetryUsed = useRef(false);
+  const renewingUrl = useRef(false);
   const resumeAfterUrlRefresh = useRef(false);
   const restore = useRef(0);
   const lastSave = useRef(0);
@@ -84,8 +85,9 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
   );
   const renewPrivateUrl = useCallback(async (authorizationRetry = false) => {
     if (!book || book.media_type !== "video" || !url) return false;
-    if (authorizationRetry && authRetryUrl.current === url) return false;
-    if (authorizationRetry) authRetryUrl.current = url;
+    if (renewingUrl.current || (authorizationRetry && authRetryUsed.current)) return false;
+    if (authorizationRetry) authRetryUsed.current = true;
+    renewingUrl.current = true;
     const player = video.current;
     restore.current = player?.currentTime || 0;
     resumeAfterUrlRefresh.current = Boolean(player && !player.paused && !player.ended);
@@ -96,6 +98,7 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
       setUrl(signed.url);
       return true;
     } catch {
+      renewingUrl.current = false;
       setUrlExpiresAt(0);
       setError("NÃ£o foi possÃ­vel renovar o acesso ao vÃ­deo. Confira sua sessÃ£o.");
       return false;
@@ -400,17 +403,18 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
               preload="metadata"
               onLoadedMetadata={(e) => {
                 const v = e.currentTarget;
-                setDuration(v.duration);
-                v.currentTime = Math.min(
-                  restore.current,
-                  Math.max(0, v.duration - 0.25),
-                );
+                setDuration(Number.isFinite(v.duration) ? v.duration : 0);
+                v.currentTime = safeVideoPosition(restore.current, v.duration);
+                renewingUrl.current = false;
                 setStatus("Pronto para assistir.");
                 if (resumeAfterUrlRefresh.current) {
                   resumeAfterUrlRefresh.current = false;
                   void v.play().catch(() => setStatus("Toque para retomar o video."));
                 }
               }}
+              onDurationChange={(e) => setDuration(Number.isFinite(e.currentTarget.duration) ? e.currentTarget.duration : 0)}
+              onWaiting={() => setStatus("Carregando video. Aguarde a conexao.")}
+              onStalled={() => setStatus("A rede esta lenta. Aguardando dados do video.")}
               onTimeUpdate={(e) => {
                 const v = e.currentTarget;
                 setTime(v.currentTime);
@@ -420,24 +424,26 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
                 }
               }}
               onPause={(e) =>
-                void save(e.currentTarget.currentTime, 0, e.currentTarget.ended)
+                !renewingUrl.current && void save(e.currentTarget.currentTime, 0, e.currentTarget.ended)
               }
               onSeeked={(e) =>
-                void save(e.currentTarget.currentTime, 0, e.currentTarget.ended)
+                !renewingUrl.current && void save(e.currentTarget.currentTime, 0, e.currentTarget.ended)
               }
-              onEnded={(e) => void save(e.currentTarget.duration, 0, true)}
-              onError={() => {
+              onEnded={(e) => void save(e.currentTarget.currentTime, 0, true)}
+              onError={(event) => {
+                const failureCode = event.currentTarget.error?.code;
                 void (async () => {
                   try {
-                    const response = await fetch(url, { method: "HEAD", cache: "no-store" });
+                    const response = await fetch(url, { method: "HEAD", cache: "no-store", signal: AbortSignal.timeout(8000) });
                     if ((response.status === 401 || response.status === 403) && await renewPrivateUrl(true)) return;
                   } catch {
                     // The player error remains visible if the authorization probe cannot run.
                   }
-                  setError("Video ausente, acesso expirado ou formato incompativel. Reabra para renovar o acesso.");
+                  renewingUrl.current = false;
+                  setError(videoFailureMessage(failureCode));
                 })();
               }}
-              onPlaying={() => setStatus("Reproduzindo")}
+              onPlaying={() => { authRetryUsed.current = false; setStatus("Reproduzindo"); }}
             />
             {target !== null && (
               <button
