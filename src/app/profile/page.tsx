@@ -120,7 +120,11 @@ function Profile({ id }: { id: string }) {
         const current = await api.from("profiles").select(field).eq("id", id).maybeSingle();
         if (current.error) throw current.error;
         return Boolean(current.data && (current.data as Record<typeof field, string | null>)[field] === newPath);
-      }, oldPath);
+      }, oldPath, async (previous) => {
+        const refs = await api.from("profiles").select("avatar_path,banner_path").eq("id", id).single();
+        if (refs.error) throw refs.error;
+        return refs.data.avatar_path === previous || refs.data.banner_path === previous;
+      });
       const signed = await api.storage
         .from("profiles")
         .createSignedUrl(path, 3600);

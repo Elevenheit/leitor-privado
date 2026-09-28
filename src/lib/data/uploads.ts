@@ -124,6 +124,7 @@ export async function replaceStorageReference(
   updateReference: (path: string) => Promise<void>,
   verifyReference: (path: string) => Promise<boolean>,
   oldPath?: string | null,
+  isOldPathReferenced?: (path: string) => Promise<boolean>,
 ) {
   await uploadStorageObject(bucket, path, file, contentType);
   try {
@@ -138,8 +139,13 @@ export async function replaceStorageReference(
     throw toDataError(cause, "Não foi possível salvar a referência do arquivo.");
   }
   if (oldPath && oldPath !== path) {
-    const cleanup = await supabase().storage.from(bucket).remove([oldPath]);
-    if (cleanup.error) return { cleanupWarning: `A nova imagem foi salva, mas a antiga ainda precisa ser removida (${oldPath}).` };
+    try {
+      if (await isOldPathReferenced?.(oldPath)) return { cleanupWarning: "" };
+      const cleanup = await supabase().storage.from(bucket).remove([oldPath]);
+      if (cleanup.error) throw cleanup.error;
+    } catch {
+      return { cleanupWarning: "A nova imagem foi salva. A imagem anterior requer limpeza administrativa." };
+    }
   }
   return { cleanupWarning: "" };
 }
