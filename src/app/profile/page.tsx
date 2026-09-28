@@ -98,16 +98,6 @@ function Profile({ id }: { id: string }) {
     }
     setBusy(true);
     try {
-      const bitmap = await createImageBitmap(file);
-      const valid =
-        bitmap.width <= 4096 &&
-        bitmap.height <= 4096 &&
-        bitmap.width * bitmap.height <= 8000000;
-      bitmap.close();
-      if (!valid)
-        throw Error(
-          "Use uma imagem de até 4096 pixels por lado e 8 megapixels.",
-        );
       const api = supabase();
       const current = await api.from("profiles").select(field).eq("id", id).single();
       if (current.error) throw current.error;

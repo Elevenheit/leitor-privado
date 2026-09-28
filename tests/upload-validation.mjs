@@ -31,3 +31,11 @@ await assert.rejects(validateCbz(new File([corrupt], "corrupt.cbz")));
 new DataView(huge.buffer).setUint32(16, 100000);
 await assert.rejects(validateCbz(cbz({ "huge.png": huge })));
 console.log("PASS: CBZ 400/401 pages, Unicode folders, corrupted content and huge image.");
+
+const padded = new Uint8Array(100000);
+padded.set(image);
+const bomb = zipSync(Object.fromEntries(Array.from({length: 14}, (_, i) => [`${i}.png`, padded])), { level: 0 });
+const bombView = new DataView(bomb.buffer);
+for (let i = 0; i < bomb.length - 46; i++) if (bombView.getUint32(i, true) === 0x02014b50) bombView.setUint32(i + 24, 12 * 1024 * 1024, true);
+await assert.rejects(validateCbz(new File([bomb], "limit.cbz")), /160 MB/);
+console.log("PASS: declared decompressed total is rejected before decompression.");

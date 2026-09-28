@@ -34,6 +34,7 @@ await db.exec(readFileSync("supabase/migrations/007_storage_visibility.sql", "ut
 await db.exec(readFileSync("supabase/migrations/008_nonnegative_catalog_numbers.sql", "utf8"));
 await db.exec(readFileSync("supabase/migrations/009_reader_navigation.sql", "utf8"));
 await db.exec(readFileSync("supabase/migrations/010_comment_report_rate_limit.sql", "utf8"));
+await db.exec(readFileSync("supabase/migrations/011_profile_storage_privacy.sql", "utf8"));
 await db.exec(
   `grant usage on schema public,auth,storage to authenticated; grant select,insert,update,delete on storage.objects to authenticated; grant execute on function auth.uid() to authenticated;`,
 );
@@ -255,6 +256,11 @@ assert.equal(
   "Reply preserved",
 );
 assert.equal((await as(b, "select * from storage.objects")).rows.length, 1);
+await db.exec(`insert into storage.objects(bucket_id,name) values ('profiles','${a}/avatar.png'),('profiles','${a}/banner.png'),('profiles','${a}/orphan.png');
+update public.profiles set avatar_path='${a}/avatar.png',banner_path='${a}/banner.png' where id='${a}'`);
+assert.equal((await as(b, "select * from storage.objects where bucket_id='profiles'")).rows.length, 1);
+assert.equal((await as(a, "select * from storage.objects where bucket_id='profiles'")).rows.length, 3);
+await db.exec("delete from storage.objects where bucket_id='profiles'");
 await db.exec(`update public.beta_access set revoked=true where user_id='${b}'`);
 assert.equal((await as(b, "select public.beta_member() as active")).rows[0].active, false);
 assert.equal((await as(b, "select * from books")).rows.length, 0);

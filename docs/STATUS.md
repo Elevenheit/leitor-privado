@@ -12,7 +12,7 @@ Data: 25/09/2026. Branch: `feat/nook-closed-beta`; base: `origin/main` (`1a019c1
 - Migração PostgreSQL executada em PGlite com schemas Auth/Storage mínimos de teste, RLS real, administrador e dois leitores. Cobre convite obrigatório, preservação de PDF/progresso/marcadores/favoritos, catálogo autorizado, independência do progresso, bloqueio de alterações alheias, proibição de autopromoção, Storage, comentários, spam, denúncia, moderação e expiração. **Não equivale a testar o serviço Supabase Auth.**
 - Regras de abertura: visível desde tempo zero, destinos 90/110 segundos, curta duração, desligada e desaparecimento após destino. Nenhum salto automático.
 - Chromium: CBZ original real descompactado pelo worker da aplicação; ordenação 1/2/10 e decodificação das imagens, rejeição de ZIP corrompido. WebM original gerado no browser, decodificado, reproduzido, pausado e buscado; fixture longa com buscas reais a 90 e 110 segundos. Não é um teste ponta a ponta da rota autenticada do player.
-- Tela real de acesso/cadastro em desktop 1440×1000 e celular 390×844; sem overflow horizontal. Capturas em `docs/screenshots`. Nenhuma captura autenticada foi falsificada com um catálogo simulado.
+- Tela real de acesso/cadastro em desktop 1440×1000 e celular 390×844; sem overflow horizontal. Capturas geradas pelo teste ficam em `artifacts/browser`. Nenhuma captura autenticada foi falsificada com um catálogo simulado.
 - Lint, tipos e build de produção verificados nesta máquina. Os comandos e testes ficam versionados.
 
 ## Implementado, ainda exige homologação no Supabase separado

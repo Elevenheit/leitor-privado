@@ -4,7 +4,7 @@ import { zipSync } from "fflate";
 import { createServer } from "node:http";
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import assert from "node:assert/strict";
-mkdirSync("docs/screenshots", { recursive: true });
+mkdirSync("artifacts/browser", { recursive: true });
 mkdirSync("tests/fixtures", { recursive: true });
 const bundle = await build({
   entryPoints: ["src/lib/cbz.worker.ts"],
@@ -63,7 +63,7 @@ try {
   });
   const bytes = Buffer.from(png, "base64");
   const archive = zipSync({ "10.png": bytes, "2.png": bytes, "1.png": bytes });
-  writeFileSync("tests/fixtures/nook-original.cbz", archive);
+  writeFileSync("artifacts/browser/nook-original.cbz", archive);
   const result = await page.evaluate(async (bytes) => {
     const w = new Worker("/worker.js");
     const received = [];
@@ -112,6 +112,21 @@ try {
     });
   });
   assert.equal(invalid, true);
+  const rapid = await page.evaluate(async (bytes) => {
+    const worker = new Worker("/worker.js");
+    return new Promise((resolve, reject) => {
+      const indices = [];
+      const timer = setTimeout(() => { worker.terminate(); reject(Error("rapid worker timeout")); }, 10000);
+      worker.onmessage = ({ data }) => {
+        if (data.error) { clearTimeout(timer); worker.terminate(); reject(Error("worker failed")); return; }
+        if (data.names) { for (const index of [2, 0, 1, 2]) worker.postMessage({ index }); }
+        else { indices.push(data.index); if (indices.length === 4) { clearTimeout(timer); worker.terminate(); resolve(indices); } }
+      };
+      worker.postMessage({ archive: new Uint8Array(bytes).buffer });
+    });
+  }, Array.from(archive));
+  assert.deepEqual(rapid, [2,0,1,2]);
+
   // Real original canvas video; no external distribution rights needed.
   const videoData = await page.evaluate(async () => {
     const c = document.createElement("canvas");
@@ -151,7 +166,7 @@ try {
     return done;
   });
   writeFileSync(
-    "tests/fixtures/nook-original.webm",
+    "artifacts/browser/nook-original.webm",
     Buffer.from(videoData, "base64"),
   );
   const playback = await page.evaluate(async (base64) => {
@@ -198,13 +213,37 @@ try {
   });
   assert.ok(seeks.duration >= 119);
   assert.deepEqual(seeks.values, [90, 110]);
-  await page.goto("http://localhost:3100");
+  const response = await page.goto("http://localhost:3100");
+  assert.equal(response.headers()["x-content-type-options"], "nosniff");
+  assert.equal(response.headers()["x-frame-options"], "DENY");
+  assert.ok(response.headers()["content-security-policy-report-only"]);
+
   await page
     .getByRole("button", { name: "Criar conta", exact: true })
     .waitFor();
+  await page.evaluate(() => {
+    const trigger = document.createElement("button");
+    trigger.id = "focus-test-origin";
+    trigger.textContent = "Open focus fixture";
+    document.body.append(trigger);
+    trigger.focus();
+    const modal = document.createElement("section");
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    modal.setAttribute("aria-label", "Local focus fixture");
+    modal.innerHTML = '<button aria-label="Fechar fixture" id="focus-close">Close</button><input autofocus id="focus-input">';
+    modal.querySelector("button").onclick = () => modal.remove();
+    document.body.append(modal);
+    modal.querySelector("input").focus();
+  });
+  await page.keyboard.press("Tab");
+  assert.equal(await page.evaluate(() => document.activeElement.id), "focus-close");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.evaluate(() => document.activeElement.id), "focus-test-origin");
+  await page.evaluate(() => document.getElementById("focus-test-origin").remove());
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.screenshot({
-    path: "docs/screenshots/access-desktop.png",
+    path: "artifacts/browser/access-desktop.png",
     fullPage: true,
   });
   await page.getByRole("button", { name: "Criar conta", exact: true }).click();
@@ -218,7 +257,7 @@ try {
   );
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({
-    path: "docs/screenshots/signup-mobile.png",
+    path: "artifacts/browser/signup-mobile.png",
     fullPage: true,
   });
   assert.equal(
@@ -228,7 +267,7 @@ try {
     true,
   );
   console.log(
-    "PASS: real CBZ worker ordering/decode/corruption; original WebM decode/play/pause/seek, real long-video seeks at 90/110s; actual login/signup UI desktop/mobile screenshots. Authenticated end-to-end tests still require test Supabase.",
+    "PASS: real CBZ worker ordering/decode/corruption/rapid requests; headers and dialog focus; original WebM decode/play/pause/seek, real long-video seeks at 90/110s; actual login/signup UI desktop/mobile screenshots. Authenticated end-to-end tests still require test Supabase.",
   );
 } finally {
   await browser.close();

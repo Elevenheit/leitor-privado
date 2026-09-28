@@ -61,7 +61,7 @@ jobs:
         with:
           name: nook-browser-artifacts
           path: |
-            docs/screenshots/*.png
+            artifacts/browser/*.png
             /tmp/nook-next.log
           if-no-files-found: ignore
           retention-days: 7

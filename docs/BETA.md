@@ -80,7 +80,7 @@ Entre como administrador → Administrar acervo. Os controles existentes preserv
 
 Obras existentes começam restritas à administração. Registre a autorização em “Autorização de compartilhamento” e clique “Liberar obra autorizada aos convidados”. A mudança de formato é bloqueada se já houver mídia incompatível. Uma obra nova deve ser criada primeiro pelos controles do acervo. A estrutura de temporadas reutiliza volumes; episódios reutilizam books com `media_type=video`.
 
-Use `tests/fixtures/nook-original.cbz` e `nook-original.webm`, produzidos pelo teste do navegador, como mídia original autorizada. O CBZ contém três páginas PNG com nomes `1`, `2`, `10`. O WebM é curto, serve para testar reprodução e o limite de duração; `nook-long.webm` contém 120 segundos (repetição da mídia original) e foi usado para buscar posições reais em 90/110 segundos no navegador. O player integrado ainda precisa dessa homologação autenticada.
+Use as fixtures versionadas em `tests/fixtures` como mídia original autorizada. O teste do navegador também gera cópias e artefatos em `artifacts/browser`. O CBZ contém três páginas PNG com nomes `1`, `2`, `10`. O WebM é curto, serve para testar reprodução e o limite de duração; `nook-long.webm` contém 120 segundos (repetição da mídia original) e foi usado para buscar posições reais em 90/110 segundos no navegador. O player integrado ainda precisa dessa homologação autenticada.
 
 Não presumimos direitos sobre os PDFs atuais. Preencha `rights_note` por obra e mantenha provas de licença fora do banco, quando necessário. Tags estão previstas em `series.tags`; filtros vazios e planos fictícios não são exibidos.
 
