@@ -1,6 +1,7 @@
 ﻿import assert from "node:assert/strict";
 import {
   calculateReadingProgress,
+  comicPageAfterKey,
   introTarget,
   naturalPages,
   validateComicImage,
@@ -75,3 +76,8 @@ view.setUint32(16, 100000);
 view.setUint32(20, 100000);
 assert.throws(() => validateComicImage(malicious));
 assert.throws(() => validateComicImage(new Uint8Array([1, 2, 3])));
+
+assert.equal(comicPageAfterKey(0, 400, "ArrowRight", false), 1);
+assert.equal(comicPageAfterKey(1, 400, "ArrowRight", true), 0);
+assert.equal(comicPageAfterKey(0, 400, "ArrowLeft", true), 1);
+assert.equal(comicPageAfterKey(399, 400, "ArrowRight", false), 399);

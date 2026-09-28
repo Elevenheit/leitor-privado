@@ -8,7 +8,7 @@ import { AuthGate } from "@/components/auth-gate";
 import { Nav } from "@/components/nav";
 import { supabase, BUCKET } from "@/lib/supabase";
 import { saveReadingProgress } from "@/lib/data/progress";
-import { calculateReadingProgress, introTarget, CBZ_LIMITS } from "@/lib/media-rules";
+import { calculateReadingProgress, introTarget, CBZ_LIMITS, comicPageAfterKey } from "@/lib/media-rules";
 import { createPrivateMediaUrl, PRIVATE_MEDIA_URL_REFRESH_MARGIN_MS } from "@/lib/private-media-url";
 import type { Book } from "@/lib/types";
 import type { Format } from "@/lib/catalog";
@@ -132,6 +132,7 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
   }, [save, webtoon]);
   useEffect(() => {
     const urls = objectUrls.current;
+    const requested = requestedPages.current;
     let live = true;
     const controller = new AbortController();
     async function load() {
@@ -205,7 +206,7 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
           w.onerror = () => setError("Falha ao processar CBZ.");
           w.onmessage = (e) => {
             if (!live) return;
-            if (e.data.error) setError(e.data.error);
+            if (e.data.error) { requestedPages.current.delete(e.data.index); setError(e.data.error); }
             else if (e.data.names) {
               setCount(e.data.names.length);
               const start = Math.min(pageRef.current, e.data.names.length - 1);
@@ -256,6 +257,8 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
       ready.current = false;
       controller.abort();
       worker.current?.terminate();
+      worker.current = null;
+      requested.clear();
       Object.values(urls).forEach(URL.revokeObjectURL);
     };
   }, [id, user.id]);
@@ -285,9 +288,9 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
         return;
       if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
         e.preventDefault();
-        const direction = (e.key === "ArrowRight" ? 1 : -1) * (rtl ? -1 : 1);
+        
         setPage((p) => {
-          const n = Math.max(0, Math.min(count - 1, p + direction));
+          const n = comicPageAfterKey(p, count, e.key, rtl);
           void save(0, n);
           return n;
         });

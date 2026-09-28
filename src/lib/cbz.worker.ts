@@ -1,3 +1,4 @@
+import { validateCbz } from "./upload-validation";
 import { unzipSync } from "fflate";
 import { naturalPages, CBZ_LIMITS, validateComicImage, MAX_RENDER_PIXELS } from "./media-rules";
 let archive: Uint8Array | null = null;
@@ -9,7 +10,9 @@ self.onmessage = (event: MessageEvent) => {
 async function processMessage(event: MessageEvent) {
   try {
     if (event.data.archive) {
+      names = [];
       archive = new Uint8Array(event.data.archive);
+      await validateCbz(new File([new Uint8Array(archive)], "chapter.cbz"));
       if (archive.byteLength > CBZ_LIMITS.archive)
         throw Error("CBZ maior que 40 MB.");
       let total = 0;
@@ -18,7 +21,7 @@ async function processMessage(event: MessageEvent) {
       unzipSync(archive, {
         filter: (f) => {
           if (++entries > 1000) throw Error("Arquivo com entradas demais.");
-          if (/\.(png|jpe?g|webp)$/i.test(f.name)) {
+          if (/\.(png|jpe?g)$/i.test(f.name)) {
             if (
               f.originalSize > CBZ_LIMITS.page ||
               f.originalSize / Math.max(1, f.size) > 200
@@ -64,6 +67,7 @@ async function processMessage(event: MessageEvent) {
       }
     }
   } catch (e) {
+    if (event.data.archive) { archive = null; names = []; }
     self.postMessage({
       index: event.data.index,
       error: e instanceof Error ? e.message : "CBZ inválido ou corrompido.",

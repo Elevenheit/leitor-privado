@@ -141,3 +141,8 @@ export function validateComicImage(data: Uint8Array) {
     throw Error("Página inválida ou com dimensões acima do limite seguro de 50 megapixels.");
   return { width, height };
 }
+
+export function comicPageAfterKey(page: number, count: number, key: string, rtl: boolean) {
+  const delta = (key === "ArrowRight" ? 1 : key === "ArrowLeft" ? -1 : 0) * (rtl ? -1 : 1);
+  return Math.max(0, Math.min(Math.max(0, count - 1), page + delta));
+}

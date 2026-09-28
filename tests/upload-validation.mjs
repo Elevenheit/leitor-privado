@@ -21,3 +21,13 @@ const huge = image.slice();
 new DataView(huge.buffer).setUint32(16, 10000);
 await assert.rejects(validateImageUpload(new File([huge], "huge.png", { type: "image/png" })));
 console.log("PASS: upload signatures, image dimensions, CBZ integrity and unsafe names.");
+
+await validateCbz(cbz(Object.fromEntries(Array.from({ length: 400 }, (_, i) => [`chapter/${i + 1}.png`, image]))));
+await assert.rejects(validateCbz(cbz(Object.fromEntries(Array.from({ length: 401 }, (_, i) => [`${i}.png`, image])))));
+await validateCbz(cbz({ "capitulo/\u65e5\u672c-1.png": image }));
+const corrupt = zipSync({ "1.png": image }, { level: 0 });
+corrupt[35] ^= 0xff;
+await assert.rejects(validateCbz(new File([corrupt], "corrupt.cbz")));
+new DataView(huge.buffer).setUint32(16, 100000);
+await assert.rejects(validateCbz(cbz({ "huge.png": huge })));
+console.log("PASS: CBZ 400/401 pages, Unicode folders, corrupted content and huge image.");
