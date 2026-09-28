@@ -1,6 +1,7 @@
 /* eslint-disable @next/next/no-img-element -- Private signed and blob URLs must stay in the browser, avoiding an image proxy. */
 "use client";
 import Link from "next/link";
+import { toDataError, reportDataError } from "@/lib/data/errors";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { User } from "@supabase/supabase-js";
@@ -209,7 +210,7 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
           w.onerror = () => setError("Falha ao processar CBZ.");
           w.onmessage = (e) => {
             if (!live) return;
-            if (e.data.error) { requestedPages.current.delete(e.data.index); setError(e.data.error); }
+            if (e.data.error) { requestedPages.current.delete(e.data.index); setError(toDataError(e.data.error, "Nao foi possivel processar esta pagina do CBZ.", "cbz").message); }
             else if (e.data.names) {
               setCount(e.data.names.length);
               const start = Math.min(pageRef.current, e.data.names.length - 1);
@@ -251,7 +252,7 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
         }
       } catch (e) {
         if (live)
-          setError(e instanceof Error ? e.message : "Falha de conexão.");
+          setError(toDataError(e, "Nao foi possivel abrir a midia. Confira o arquivo e seu acesso.", "storage").message);
       }
     }
     void load();
@@ -432,6 +433,7 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
               onEnded={(e) => void save(e.currentTarget.currentTime, 0, true)}
               onError={(event) => {
                 const failureCode = event.currentTarget.error?.code;
+                reportDataError(event.currentTarget.error, "video");
                 void (async () => {
                   try {
                     const response = await fetch(url, { method: "HEAD", cache: "no-store", signal: AbortSignal.timeout(8000) });

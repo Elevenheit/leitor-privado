@@ -1,5 +1,6 @@
 "use client";
 
+import { toDataError, reportDataError } from "@/lib/data/errors";
 import { BookOpen, LockKeyhole, LogIn } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import type { User } from "@supabase/supabase-js";
@@ -24,6 +25,9 @@ export function AuthGate({
     const api = supabase();
     api.auth.getUser().then(({ data, error }) => {
       setUser(error ? null : data.user);
+      setLoading(false);
+    }).catch((cause) => {
+      setError(toDataError(cause, "Nao foi possivel conferir a sessao. Tente novamente.", "auth").message);
       setLoading(false);
     });
     const { data: listener } = api.auth.onAuthStateChange((_event, session) => {
@@ -64,6 +68,7 @@ export function AuthGate({
       const { data, error } = signup
         ? await supabase().auth.signUp(credentials)
         : await supabase().auth.signInWithPassword(credentials);
+      if (error) reportDataError(error, "auth");
       if (error)
         setError(
           error.code === "user_already_exists"

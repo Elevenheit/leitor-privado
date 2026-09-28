@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { toDataError } from "@/lib/data/errors";
 import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft,
@@ -432,7 +433,7 @@ function Reader({ user, id }: { user: User; id: string }) {
       } catch (cause) {
         if (!cancelled) {
           setError(
-            cause instanceof Error ? cause.message : "Falha ao abrir PDF.",
+            toDataError(cause, "Nao foi possivel abrir o PDF. Confira o arquivo e seu acesso.", "pdf").message,
           );
           setLoading(false);
         }
@@ -530,7 +531,7 @@ function Reader({ user, id }: { user: User; id: string }) {
           setTextByPage((previous) => ({ ...previous, [pageNo]: blocks }));
       } catch (cause) {
         setError(
-          cause instanceof Error ? cause.message : "Falha ao extrair texto.",
+          toDataError(cause, "Nao foi possivel extrair o texto desta pagina.", "pdf").message,
         );
       } finally {
         loadingRef.current.delete(pageNo);

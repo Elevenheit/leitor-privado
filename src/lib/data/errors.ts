@@ -7,18 +7,29 @@ export type DataErrorKind =
   | "partial"
   | "unknown";
 
+export type ErrorOperation = "auth" | "supabase" | "storage" | "pdf" | "cbz" | "video";
+export function reportDataError(error: unknown, operation: ErrorOperation) {
+  if (process.env.NODE_ENV !== "development") return;
+  console.warn("[nook]", { operation, kind: error instanceof DataError ? error.kind : "unknown" });
+}
+
 export class DataError extends Error {
+  readonly kind: DataErrorKind;
+  readonly cause?: unknown;
   constructor(
     message: string,
-    readonly kind: DataErrorKind,
-    readonly cause?: unknown,
+    kind: DataErrorKind,
+    cause?: unknown,
   ) {
     super(message);
     this.name = "DataError";
+    this.kind = kind;
+    this.cause = cause;
   }
 }
 
-export function toDataError(cause: unknown, fallback: string): DataError {
+export function toDataError(cause: unknown, fallback: string, operation: ErrorOperation = "supabase"): DataError {
+  reportDataError(cause, operation);
   if (cause instanceof DataError) return cause;
   const error = cause as {
     code?: string;
@@ -26,17 +37,17 @@ export function toDataError(cause: unknown, fallback: string): DataError {
     name?: string;
     message?: string;
   };
-  const message = error?.message || fallback;
+  const message = typeof error?.message === "string" ? error.message : fallback;
   const text = message.toLowerCase();
   if (error?.status === 401 || /jwt|session.*expir|refresh token/.test(text))
     return new DataError("Sua sessão expirou. Entre novamente.", "session", cause);
   if (error?.status === 403 || error?.code === "42501")
     return new DataError("Você não tem autorização para esta operação.", "authorization", cause);
   if (error?.name === "StorageError" || /storage|bucket|object not found/.test(text))
-    return new DataError(`Falha no armazenamento: ${message}`, "storage", cause);
+    return new DataError("Falha no armazenamento. Tente novamente.", "storage", cause);
   if (/failed to fetch|network|fetch failed|offline/.test(text))
     return new DataError("Falha de conexão. Confira a rede e tente novamente.", "network", cause);
-  return new DataError(message || fallback, "unknown", cause);
+  return new DataError(fallback, "unknown", cause);
 }
 
 export function throwOnError<T>(
