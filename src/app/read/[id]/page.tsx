@@ -24,6 +24,7 @@ import {
   type ReaderIllustration,
 } from "@/lib/reader-illustrations";
 import { BUCKET, supabase } from "@/lib/supabase";
+import { getReaderNavigationNeighbors } from "@/lib/data/reader-navigation";
 import { saveReadingProgress } from "@/lib/data/progress";
 import { calculateReadingProgress } from "@/lib/media-rules";
 import { createPrivateMediaUrl, isPrivateMediaAuthorizationError, PRIVATE_MEDIA_URL_REFRESH_MARGIN_MS } from "@/lib/private-media-url";
@@ -281,6 +282,7 @@ function Reader({ user, id }: { user: User; id: string }) {
     let task: PDFDocumentLoadingTask | null = null;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     async function init() {
+      console.info("[Reader] carregando mídia", { id });
       try {
         const api = supabase();
         const [bookResult, progressResult] = await Promise.all([
@@ -290,7 +292,17 @@ function Reader({ user, id }: { user: User; id: string }) {
         if (bookResult.error || !bookResult.data)
           throw new Error("Capítulo não encontrado ou sem acesso.");
         const current = bookResult.data as Book;
-        const [workResult, volumeResult, privateUrl, indexVolumes, neighborsResult] = await Promise.all([
+        console.info("[Reader] tipo detectado", current.media_type);
+        console.info("[Reader] storage path", current.file_path);
+        void getReaderNavigationNeighbors(current)
+          .then(({ previousId, nextId }) => {
+            if (!cancelled) {
+              setPreviousId(previousId);
+              setNextId(nextId);
+            }
+          })
+          .catch((error) => console.error("[Navigation] erro", error));
+        const [workResult, volumeResult, privateUrl, indexVolumes] = await Promise.all([
           current.series_id
             ? api
                 .from("series")
@@ -309,9 +321,8 @@ function Reader({ user, id }: { user: User; id: string }) {
           current.series_id
             ? api.from("volumes").select("id,owner_id,series_id,volume_number,title,description,sort_order,created_at,updated_at").eq("series_id", current.series_id).order("sort_order").order("volume_number")
             : Promise.resolve({ data: [] as Volume[], error: null }),
-          api.rpc("reader_navigation_neighbors", { target_book_id: id }).maybeSingle().returns<{ previous_id: string | null; next_id: string | null }>(),
         ]);
-        if (neighborsResult.error) throw neighborsResult.error;
+        console.info("[Reader] URL obtida", { expiresAt: privateUrl.expiresAt });
         const pdfjs = await import("pdfjs-dist");
         pdfjs.GlobalWorkerOptions.workerSrc = new URL(
           "pdfjs-dist/build/pdf.worker.min.mjs",
@@ -324,6 +335,13 @@ function Reader({ user, id }: { user: User; id: string }) {
           rangeChunkSize: 262144,
         });
         let activePrivateUrl = privateUrl;
+        void fetch(activePrivateUrl.url, { method: "HEAD" })
+          .then((response) =>
+            console.info("[Reader] fetch status", response.status),
+          )
+          .catch((error) =>
+            console.warn("[Reader] fetch status indisponível", error),
+          );
         task = openDocument(activePrivateUrl.url);
         let loaded: PDFDocumentProxy;
         try {
@@ -377,8 +395,6 @@ function Reader({ user, id }: { user: User; id: string }) {
         setLibraryBooks([]);
         setLibraryProgress({});
         setLibraryHasMore(true);
-        setPreviousId(neighborsResult.data?.previous_id || null);
-        setNextId(neighborsResult.data?.next_id || null);
         // Catalog metadata is written only by administrators.
         try {
           const prefs = localStorage.getItem("nook-reader-prefs");

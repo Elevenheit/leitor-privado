@@ -5,9 +5,14 @@ import { readFileSync } from "node:fs";
 const bundle = await build({ entryPoints: ["src/lib/upload-validation.ts"], bundle: true, write: false, format: "esm", platform: "node" });
 const { validateStorageUpload, validateCbz, validateImageUpload } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`);
 const image = Object.values(unzipSync(readFileSync("tests/fixtures/nook-original.cbz")))[0];
+const webp = new Uint8Array(30);
+webp.set(new TextEncoder().encode("RIFF"), 0);
+webp.set(new TextEncoder().encode("WEBP"), 8);
+webp.set(new TextEncoder().encode("VP8X"), 12);
 const cbz = (entries) => new File([zipSync(entries)], "test.cbz", { type: "application/zip" });
 await validateCbz(cbz({ "chapter/1.png": image }));
-for (const name of ["../evil.png", "C:/evil.png", "/evil.png", "page.html", "page.webp", "a/../../evil.png", "bad\u0000.png"]) {
+await validateCbz(cbz({ "chapter/3.webp": webp }));
+for (const name of ["../evil.png", "C:/evil.png", "/evil.png", "page.html", "a/../../evil.png", "bad\u0000.png"]) {
   await assert.rejects(validateCbz(cbz({ [name]: image })), name);
 }
 await assert.rejects(validateCbz(new File([new Uint8Array([1, 2, 3])], "bad.cbz")));

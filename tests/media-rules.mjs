@@ -60,12 +60,13 @@ assert.deepEqual(
   naturalPages([
     "10.png",
     "2.png",
+    "3.webp",
     "1.png",
     "__MACOSX/1.png",
     ".hidden.png",
     "readme.txt",
   ]),
-  ["1.png", "2.png", "10.png"],
+  ["1.png", "2.png", "3.webp", "10.png"],
 );
 console.log(
   "PASS: intro visible at zero; 90s,110s,short/disabled/ended; numeric CBZ order.",

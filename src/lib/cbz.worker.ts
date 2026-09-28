@@ -1,7 +1,7 @@
 import { validateCbz } from "./upload-validation";
-import { unzipSync } from "fflate";
+import JSZip from "jszip";
 import { naturalPages, CBZ_LIMITS, validateComicImage, MAX_RENDER_PIXELS } from "./media-rules";
-let archive: Uint8Array | null = null;
+let archive: JSZip | null = null;
 let names: string[] = [];
 let operation = Promise.resolve();
 self.onmessage = (event: MessageEvent) => {
@@ -11,41 +11,23 @@ async function processMessage(event: MessageEvent) {
   try {
     if (event.data.archive) {
       names = [];
-      archive = new Uint8Array(event.data.archive);
-      await validateCbz(new File([new Uint8Array(archive)], "chapter.cbz"));
-      if (archive.byteLength > CBZ_LIMITS.archive)
+      const archiveBytes = event.data.archive as ArrayBuffer;
+      await validateCbz(new File([archiveBytes], "chapter.cbz"));
+      if (archiveBytes.byteLength > CBZ_LIMITS.archive)
         throw Error("CBZ maior que 40 MB.");
-      let total = 0;
-      const files: string[] = [];
-      let entries = 0;
-      unzipSync(archive, {
-        filter: (f) => {
-          if (++entries > 1000) throw Error("Arquivo com entradas demais.");
-          if (/\.(png|jpe?g)$/i.test(f.name)) {
-            if (
-              f.originalSize > CBZ_LIMITS.page ||
-              f.originalSize / Math.max(1, f.size) > 200
-            )
-              throw Error("Página excede os limites de segurança.");
-            total += f.originalSize;
-            files.push(f.name);
-          }
-          return false;
-        },
-      });
-      names = naturalPages(files);
-      if (
-        !names.length ||
-        names.length > CBZ_LIMITS.pages ||
-        total > CBZ_LIMITS.total
-      )
-        throw Error("CBZ vazio ou acima do limite de 400 páginas / 160 MB.");
-      self.postMessage({ names });
+      archive = await JSZip.loadAsync(archiveBytes);
+      const entries = Object.values(archive.files);
+      names = naturalPages(
+        entries.filter((entry) => !entry.dir).map((entry) => entry.name),
+      );
+      self.postMessage({ names, fileCount: entries.filter((entry) => !entry.dir).length });
     } else if (archive) {
       const index = event.data.index;
       const name = names[index];
       if (!name) throw Error("Página inexistente");
-      const file = unzipSync(archive, { filter: (f) => f.name === name })[name];
+      const entry = archive.file(name);
+      if (!entry) throw Error("Página inexistente");
+      const file = new Uint8Array(await entry.async("uint8array"));
       const { width, height } = validateComicImage(file);
       const sourceMime = /\.png$/i.test(name) ? "image/png" : /\.webp$/i.test(name) ? "image/webp" : "image/jpeg";
       if (width * height <= MAX_RENDER_PIXELS) {
@@ -68,6 +50,7 @@ async function processMessage(event: MessageEvent) {
     }
   } catch (e) {
     if (event.data.archive) { archive = null; names = []; }
+    console.error("[CBZ] erro", e);
     self.postMessage({
       index: event.data.index,
       error: e instanceof Error ? e.message : "CBZ inválido ou corrompido.",

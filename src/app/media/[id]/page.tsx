@@ -11,6 +11,7 @@ import { supabase, BUCKET } from "@/lib/supabase";
 import { saveReadingProgress } from "@/lib/data/progress";
 import { calculateReadingProgress, introTarget, CBZ_LIMITS, comicPageAfterKey, safeVideoPosition, videoFailureMessage } from "@/lib/media-rules";
 import { createPrivateMediaUrl, PRIVATE_MEDIA_URL_REFRESH_MARGIN_MS } from "@/lib/private-media-url";
+import { getReaderNavigationNeighbors } from "@/lib/data/reader-navigation";
 import type { Book } from "@/lib/types";
 import type { Format } from "@/lib/catalog";
 import { mediaHref } from "@/lib/catalog";
@@ -140,6 +141,7 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
     let live = true;
     const controller = new AbortController();
     async function load() {
+      console.info("[Reader] carregando mídia", { id });
       try {
         const api = supabase();
         const [b, p] = await Promise.all([
@@ -155,7 +157,24 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
           throw Error("Mídia indisponível ou acesso encerrado.");
         if (!live) return;
         const item = b.data as Book;
+        console.info("[Reader] tipo detectado", item.media_type);
+        console.info("[Reader] storage path", item.file_path);
         setBook(item);
+        void getReaderNavigationNeighbors(item)
+          .then(async (neighbors) => {
+            if (!neighbors.nextId) return null;
+            const upcoming = await api
+              .from("books")
+              .select("id,media_type")
+              .eq("id", neighbors.nextId)
+              .maybeSingle();
+            if (upcoming.error) throw upcoming.error;
+            return upcoming.data as Pick<Book, "id" | "media_type"> | null;
+          })
+          .then((upcoming) => {
+            if (live && upcoming) setNext(upcoming);
+          })
+          .catch((error) => console.error("[Navigation] erro", error));
         if (item.series_id) {
           const series = await api.from("series").select("format").eq("id", item.series_id).maybeSingle();
           if (series.error) throw Error("NÃ£o foi possÃ­vel carregar o formato da obra.");
@@ -166,53 +185,55 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
         pageRef.current = Math.max(0, (p.data?.page_number ?? 1) - 1);
         setPage(pageRef.current);
         const signed = await createPrivateMediaUrl(BUCKET, item.file_path);
+        console.info("[Reader] URL obtida", { expiresAt: signed.expiresAt });
         if (item.media_type === "video") {
           setUrlExpiresAt(signed.expiresAt);
           setUrl(signed.url);
           ready.current = true;
           setStatus("Pronto para assistir.");
+          void fetch(signed.url, { method: "HEAD" })
+            .then((response) =>
+              console.info("[Reader] fetch status", response.status),
+            )
+            .catch((error) =>
+              console.warn("[Reader] fetch status indisponível", error),
+            );
         } else if (item.media_type === "cbz") {
           if (item.size_bytes > CBZ_LIMITS.archive)
             throw Error("CBZ maior que 40 MB.");
           let mediaUrl = signed.url;
           let response = await fetch(mediaUrl, { signal: controller.signal });
+          console.info("[Reader] fetch status", response.status);
           if (response.status === 401 || response.status === 403) {
             mediaUrl = (await createPrivateMediaUrl(BUCKET, item.file_path)).url;
             response = await fetch(mediaUrl, { signal: controller.signal });
+            console.info("[Reader] fetch status", response.status);
           }
           if (!response.ok)
             throw Error("Arquivo ausente ou conexão interrompida.");
-          const reader = response.body?.getReader();
-          if (!reader) throw Error("Não foi possível ler o arquivo.");
-          const chunks: Uint8Array[] = [];
-          let size = 0;
-          while (true) {
-            const r = await reader.read();
-            if (r.done) break;
-            size += r.value.length;
-            if (size > CBZ_LIMITS.archive) {
-              await reader.cancel();
-              throw Error("CBZ maior que 40 MB.");
-            }
-            chunks.push(r.value);
-          }
-          const bytes = new Uint8Array(size);
-          let offset = 0;
-          for (const c of chunks) {
-            bytes.set(c, offset);
-            offset += c.length;
-          }
+          const archive = await response.arrayBuffer();
+          if (archive.byteLength > CBZ_LIMITS.archive)
+            throw Error("CBZ maior que 40 MB.");
           if (!live) return;
+          console.info("[CBZ] iniciando extração", {
+            archiveBytes: archive.byteLength,
+          });
           const w = new Worker(
             new URL("../../../lib/cbz.worker.ts", import.meta.url),
           );
           worker.current = w;
-          w.onerror = () => setError("Falha ao processar CBZ.");
+          w.onerror = (event) => {
+            console.error("[CBZ] erro", event.message);
+            setError("Falha ao processar CBZ.");
+          };
           w.onmessage = (e) => {
             if (!live) return;
-            if (e.data.error) { requestedPages.current.delete(e.data.index); setError(toDataError(e.data.error, "Nao foi possivel processar esta pagina do CBZ.", "cbz").message); }
+            if (e.data.error) { console.error("[CBZ] erro", e.data.error); requestedPages.current.delete(e.data.index); setError(toDataError(e.data.error, "Nao foi possivel processar esta pagina do CBZ.", "cbz").message); }
             else if (e.data.names) {
+              console.info("[CBZ] arquivos encontrados", e.data.fileCount);
+              console.info("[CBZ] imagens encontradas", e.data.names.length);
               setCount(e.data.names.length);
+              setVertical(true);
               const start = Math.min(pageRef.current, e.data.names.length - 1);
               pageRef.current = start;
               setPage(start);
@@ -239,17 +260,8 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
               setImages({ ...objectUrls.current });
             }
           };
-          w.postMessage({ archive: bytes.buffer }, [bytes.buffer]);
+          w.postMessage({ archive }, [archive]);
         } else throw Error("Abra este arquivo no leitor de PDF.");
-        if (item.series_id) {
-          const neighbors = await api.rpc("reader_navigation_neighbors", { target_book_id: id }).maybeSingle().returns<{ previous_id: string | null; next_id: string | null }>();
-          if (neighbors.error) throw neighbors.error;
-          if (neighbors.data?.next_id) {
-            const upcoming = await api.from("books").select("id,media_type").eq("id", neighbors.data.next_id).maybeSingle();
-            if (upcoming.error) throw upcoming.error;
-            if (live) setNext(upcoming.data as Pick<Book, "id" | "media_type"> | null);
-          }
-        }
       } catch (e) {
         if (live)
           setError(toDataError(e, "Nao foi possivel abrir a midia. Confira o arquivo e seu acesso.", "storage").message);
@@ -269,7 +281,7 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
   useEffect(() => {
     pageRef.current = page;
     if (!count) return;
-    const windowSize = webtoon ? 6 : 1;
+    const windowSize = webtoon || vertical ? 6 : 1;
     for (const key of Object.keys(objectUrls.current)) {
       const i = Number(key);
       if (Math.abs(i - page) > windowSize) {
@@ -283,7 +295,7 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
         worker.current?.postMessage({ index: i });
       }
     }
-  }, [page, count, webtoon]);
+  }, [page, count, vertical, webtoon]);
   useEffect(() => {
     if (!count) return;
     function key(e: KeyboardEvent) {
@@ -543,20 +555,41 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
                   move(page + (dx < 0 ? 1 : -1) * (rtl ? -1 : 1));
               }}
               onScroll={(e) => {
+                let activePage = page;
+                if (vertical && !webtoon) {
+                  const area = e.currentTarget.getBoundingClientRect();
+                  const center = area.top + area.height / 2;
+                  const candidates = Object.entries(pageElements.current).filter(
+                    ([, node]) =>
+                      node &&
+                      node.getBoundingClientRect().bottom > area.top &&
+                      node.getBoundingClientRect().top < area.bottom,
+                  );
+                  const current = candidates.sort(
+                    (a, b) =>
+                      Math.abs((a[1]?.getBoundingClientRect().top || 0) - center) -
+                      Math.abs((b[1]?.getBoundingClientRect().top || 0) - center),
+                  )[0];
+                  if (current) {
+                    activePage = Number(current[0]);
+                    pageRef.current = activePage;
+                    if (activePage !== page) setPage(activePage);
+                  }
+                }
                 if (!webtoon && Date.now() - lastSave.current > 1500) {
                   lastSave.current = Date.now();
                   const el = e.currentTarget;
                   void save(
                     0,
-                    page,
-                    page === count - 1,
+                    activePage,
+                    activePage === count - 1,
                     el.scrollTop /
                       Math.max(1, el.scrollHeight - el.clientHeight),
                   );
                 }
               }}
             >
-              {(webtoon ? Array.from({ length: count }, (_, i) => i) : vertical ? [page, Math.min(page + 1, count - 1)] : [page])
+              {(webtoon || vertical ? Array.from({ length: count }, (_, i) => i) : [page])
                 .filter((x, i, a) => a.indexOf(x) === i)
                 .map((i) => webtoon ? (
                   <div key={i} data-page-index={i} ref={(element) => { pageElements.current[i] = element; }} className="webtoon-page" style={{ aspectRatio: "0.72", maxWidth: "100%" }}>
@@ -565,6 +598,19 @@ function Media({ id, user, router }: { id: string; user: User; router: ReturnTyp
                       const container = image.parentElement;
                       if (container) container.style.aspectRatio = `${image.naturalWidth} / ${image.naturalHeight}`;
                     }} /> : <span>Carregando pÃ¡ginaâ€¦</span>}
+                  </div>
+                ) : vertical ? (
+                  <div key={i} data-page-index={i} ref={(element) => { pageElements.current[i] = element; }} className="webtoon-page" style={{ aspectRatio: "0.72", maxWidth: "100%" }}>
+                    {images[i] ? <img src={images[i]} alt={`Página ${i + 1}`} style={{ width: `${zoom}%` }} onLoad={(e) => {
+                      const image = e.currentTarget;
+                      const container = image.parentElement;
+                      if (container) container.style.aspectRatio = `${image.naturalWidth} / ${image.naturalHeight}`;
+                      if (i === page && scrollRestore.current && imageArea.current) {
+                        const area = imageArea.current;
+                        area.scrollTop = scrollRestore.current * (area.scrollHeight - area.clientHeight);
+                        scrollRestore.current = 0;
+                      }
+                    }} /> : <span>Carregando página…</span>}
                   </div>
                 ) : images[i] ? (
                     <img

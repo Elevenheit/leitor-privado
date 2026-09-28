@@ -79,8 +79,8 @@ export async function validateCbz(file: File) {
       throw new Error("O CBZ contém um caminho de arquivo inseguro.");
     }
     if (normalized.endsWith("/")) continue;
-    if (!/\.(png|jpe?g)$/i.test(normalized) || normalized.startsWith("__MACOSX/") || normalized.split("/").some((part) => part.startsWith("."))) {
-      throw new Error("CBZ deve conter somente páginas PNG ou JPEG.");
+    if (!/\.(png|jpe?g|webp)$/i.test(normalized) || normalized.startsWith("__MACOSX/") || normalized.split("/").some((part) => part.startsWith("."))) {
+      throw new Error("CBZ deve conter somente páginas PNG, JPEG ou WebP.");
     }
     if (seen.has(normalized)) throw new Error("Nomes duplicados no CBZ.");
     seen.add(normalized);
@@ -98,7 +98,8 @@ export async function validateCbz(file: File) {
     if (!bytes || bytes.length !== entry.uncompressed || crc32(bytes) !== entry.crc) throw new Error("Pagina CBZ corrompida.");
     const png = bytes[0] === 137 && bytes[1] === 80;
     const jpeg = bytes[0] === 255 && bytes[1] === 216;
-    if ((/\.png$/i.test(entry.name) && !png) || (/\.jpe?g$/i.test(entry.name) && !jpeg)) throw new Error("Pagina CBZ deve ser PNG ou JPEG real.");
+    const webp = bytes.length >= 12 && String.fromCharCode(...bytes.subarray(0, 4)) === "RIFF" && String.fromCharCode(...bytes.subarray(8, 12)) === "WEBP";
+    if ((/\.png$/i.test(entry.name) && !png) || (/\.jpe?g$/i.test(entry.name) && !jpeg) || (/\.webp$/i.test(entry.name) && !webp)) throw new Error("Pagina CBZ deve ser PNG, JPEG ou WebP real.");
     validateComicImage(bytes);
   }
 }
