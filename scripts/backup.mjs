@@ -1,3 +1,4 @@
+import { fileDigest, tableInventory } from "./backup-inventory.mjs";
 ﻿// Read-only backup; credentials supplied only through the shell environment.
 import { createClient } from "@supabase/supabase-js";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -60,11 +61,18 @@ async function walk(bucket, prefix = "") {
 }
 for (const bucket of ["novels", "covers"]) await walk(bucket);
 const buckets = await client.storage.listBuckets();
+if (buckets.error) throw Error("Could not inventory buckets.");
 if (buckets.data?.some((b) => b.id === "profiles")) await walk("profiles");
 await writeFile(
   resolve(root, "manifest.json"),
   JSON.stringify(manifest, null, 2),
 );
+await writeFile(resolve(root, "backup.json"), JSON.stringify({
+  version: 1, createdAt: new Date().toISOString(),
+  database: await fileDigest(resolve(root, "database.dump")),
+  objectCount: manifest.length, objectBytes: manifest.reduce((sum, item) => sum + item.bytes, 0),
+  tables: await tableInventory(client),
+}, null, 2));
 console.log(
   `Read-only backup completed: ${manifest.length} objects. Keep the backups folder encrypted and outside Git.`,
 );
