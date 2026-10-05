@@ -12,7 +12,7 @@ const output = join(tmpdir(), "nook-rail-review");
 mkdirSync(output, { recursive: true });
 const userA = "11111111-1111-4111-8111-111111111111";
 const userB = "22222222-2222-4222-8222-222222222222";
-const formats = ["novel", "manga", "manhwa", "anime"];
+const formats = ["novel", "manga", "manhwa"];
 const titles = [
   "O jardim das palavras",
   "Cartas de outono",
@@ -34,7 +34,7 @@ const titles = [
 const series = titles.map((title, i) => ({
   id: `series-${i}`,
   title,
-  format: formats[i % 4],
+  format: formats[i % 3],
   cover_path: `cover-${i}.svg`,
   created_at: new Date(
     Date.UTC(2026, 8, 24, 0, 0, 0) - i * 60000,
@@ -44,14 +44,13 @@ const entries = series.map((s, i) => ({
   book_id: `book-${i}`,
   owner_id: userA,
   page_number: 12,
-  position_seconds: 1207,
+  scroll_ratio: 0.5,
   completed: i === 4,
   updated_at: s.created_at,
   books: {
     id: `book-${i}`,
     title: `Capítulo ${i + 1}`,
-    media_type:
-      s.format === "anime" ? "video" : s.format === "novel" ? "pdf" : "cbz",
+    media_type: s.format === "novel" ? "pdf" : "cbz",
     total_pages: s.format === "novel" ? 24 : null,
     chapter_number: i + 1,
     chapter_title: null,
@@ -196,11 +195,14 @@ async function setup(id, admin = false) {
 try {
   const { page, state } = await setup(userA);
   const viewports = [
+    [320, 720],
     [360, 800],
+    [375, 812],
     [390, 844],
     [430, 932],
     [768, 1024],
     [820, 1180],
+    [1024, 768],
     [1366, 768],
     [1440, 900],
     [1920, 1080],
@@ -220,7 +222,7 @@ try {
         .poll(() =>
           page.evaluate(() => getComputedStyle(document.body).paddingLeft),
         )
-        .toBe(width >= 901 ? "76px" : "0px");
+        .toBe(width >= 901 ? "82px" : "0px");
       const expected = entries
         .filter(
           (e) =>
@@ -289,7 +291,7 @@ try {
     .poll(() =>
       page.evaluate(() => getComputedStyle(document.body).paddingLeft),
     )
-    .toBe("76px");
+    .toBe("82px");
   const before = await page.locator(".beta-dashboard").boundingBox();
   await page
     .getByRole("button", { name: "Expandir navegação", exact: true })
@@ -301,15 +303,15 @@ try {
     .poll(async () =>
       Math.round((await page.locator(".navigation-rail").boundingBox()).width),
     )
-    .toBe(236);
+    .toBe(248);
   await expect
     .poll(() =>
       page.evaluate(() => getComputedStyle(document.body).paddingLeft),
     )
-    .toBe("236px");
+    .toBe("248px");
   const expandedContent = await page.locator(".beta-dashboard").boundingBox();
   assert.ok(expandedContent.x > before.x);
-  assert.ok(expandedContent.x >= 236 + 24);
+  assert.ok(expandedContent.x >= 248 + 24);
   await page.screenshot({
     path: join(output, "rail-expanded-1440.png"),
     fullPage: true,
@@ -322,7 +324,7 @@ try {
     .poll(async () =>
       Math.round((await page.locator(".navigation-rail").boundingBox()).width),
     )
-    .toBe(76);
+    .toBe(82);
   await page.locator(".navigation-rail summary").click();
   await expect(
     page.getByRole("link", { name: "Administrar acervo" }),
@@ -332,19 +334,13 @@ try {
     "open",
     "",
   );
-  // Known totals get percentages; video has only saved time, never a made-up duration.
+  // Known totals get percentages; unknown totals still show the current page.
   await expect(
     page.locator('.history-card[href="/read/book-0"] [role=progressbar]'),
   ).toHaveAttribute("aria-valuenow", "50");
   await expect(
-    page.locator('.history-card[href="/read/book-4"]'),
+    page.locator('.history-card[href="/media/book-4"]'),
   ).toContainText("Concluído");
-  await expect(
-    page.locator('.history-card[href="/media/book-3"]'),
-  ).toContainText("20:07 assistidos");
-  await expect(
-    page.locator('.history-card[href="/media/book-3"] [role=progressbar]'),
-  ).toHaveCount(0);
   await expect(
     page.locator('.history-card[href="/media/book-1"] [role=progressbar]'),
   ).toHaveCount(0);
@@ -390,7 +386,7 @@ try {
   await expect(second.page.locator(".history-card")).toHaveCount(1);
   await expect(second.page.locator(".history-card")).toHaveAttribute(
     "href",
-    "/media/book-15",
+    "/read/book-15",
   );
   await second.page.locator(".navigation-rail summary").click();
   await expect(
@@ -407,7 +403,7 @@ try {
     .poll(() =>
       page.evaluate(() => getComputedStyle(document.body).paddingLeft),
     )
-    .toBe("76px");
+    .toBe("82px");
   await page.goto(origin + "/about");
   await expect(page.locator(".navigation-rail")).toBeVisible();
   assert.deepEqual(failures, []);

@@ -95,7 +95,7 @@ async function cleanupObject(bucket: StorageBucket, path: string, original: unkn
   if (cleanup.error) throw new DataError(`A operação falhou e a limpeza do arquivo também. Verifique o objeto ${path} no Storage.`, "partial", { original, cleanup: cleanup.error });
 }
 
-export async function registerUploadedBook(book: Omit<Book, "id" | "created_at" | "total_pages">, removeUploadedObject = true) {
+export async function registerUploadedBook(book: Omit<Book, "id" | "created_at" | "total_pages"> & { total_pages?: number | null }, removeUploadedObject = true) {
   const result = await supabase().from("books").insert(book);
   if (!result.error) return;
   const original = toDataError(result.error, "Não foi possível registrar o arquivo no catálogo.");
@@ -107,7 +107,7 @@ export async function registerUploadedBook(book: Omit<Book, "id" | "created_at" 
 }
 
 export async function uploadAndRegisterBook(
-  book: Omit<Book, "id" | "created_at" | "total_pages">,
+  book: Omit<Book, "id" | "created_at" | "total_pages"> & { total_pages?: number | null },
   file: File,
   contentType: string,
   options: UploadOptions = {},

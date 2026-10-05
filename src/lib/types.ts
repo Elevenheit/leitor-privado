@@ -1,7 +1,5 @@
 export type Book = {
-  media_type: "pdf" | "cbz" | "video";
-  skip_intro: boolean;
-  intro_end: number;
+  media_type: "pdf" | "cbz";
   id: string;
   owner_id: string;
   title: string;
@@ -19,7 +17,7 @@ export type Book = {
 };
 
 export type Series = {
-  format: "novel" | "manga" | "manhwa" | "anime";
+  format: "novel" | "manga" | "manhwa";
   id: string;
   owner_id: string;
   title: string;
@@ -54,7 +52,7 @@ export type ReadingProgress = {
   reading_mode: "text" | "page";
   updated_at: string;
   completed: boolean;
-  position_seconds: number;
+  page_count?: number | null;
 };
 
 export type ReadingBookmark = {

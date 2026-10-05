@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { Search } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import { getPrivateCoverUrl } from "@/lib/cover-url";
 import { setFavorite } from "@/lib/data/favorites";
 import { toDataError } from "@/lib/data/errors";
 import { formats, type Format } from "@/lib/catalog";
@@ -35,7 +35,6 @@ export function Catalog({
       setLoading(true);
       setError("");
       try {
-        const api = supabase();
         const result = await listCatalogPage({ ownerId: user.id, page, format, favoritesOnly: list, search: q });
         if (!live) return;
         const rows = result.items;
@@ -46,10 +45,7 @@ export function Catalog({
           rows
             .filter((x) => x.cover_path)
             .map(async (x) => {
-              const { data } = await api.storage
-                .from("covers")
-                .createSignedUrl(x.cover_path!, 3600);
-              return [x.id, data?.signedUrl || ""];
+              return [x.id, await getPrivateCoverUrl(user.id, x.cover_path!).catch(() => "")];
             }),
         );
         if (live) setCovers(Object.fromEntries(c));

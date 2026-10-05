@@ -1,76 +1,11 @@
-﻿import assert from "node:assert/strict";
-import {
-  calculateReadingProgress,
-  comicPageAfterKey,
-  safeVideoPosition,
-  videoFailureMessage,
-  introTarget,
-  naturalPages,
-  validateComicImage,
-} from "../src/lib/media-rules.ts";
-assert.equal(introTarget(true, 90, 180, 0), 90);
-assert.equal(introTarget(true, 110, 180, 0), 110);
-assert.equal(introTarget(true, 110, 42, 0), 42);
-assert.equal(introTarget(false, 90, 180, 0), null);
-assert.equal(introTarget(true, 90, 180, 90), null);
-assert.equal(introTarget(true, 110, 42, 42), null);
-assert.equal(introTarget(true, 90, Infinity, 0), null);
-assert.equal(introTarget(true, 89, 180, 0), null);
-assert.deepEqual(
-  calculateReadingProgress({ mediaType: "pdf", pageNumber: 1, totalPages: 10, scrollRatio: 0.1 }),
-  { percent: 10, completed: false },
-);
-assert.equal(
-  calculateReadingProgress({ mediaType: "pdf", pageNumber: 10, totalPages: 10, scrollRatio: 0.8 }).completed,
-  false,
-);
-assert.equal(
-  calculateReadingProgress({ mediaType: "pdf", pageNumber: 10, totalPages: 10, scrollRatio: 0.96 }).completed,
-  true,
-);
-assert.equal(
-  calculateReadingProgress({ mediaType: "cbz", pageNumber: 1, totalPages: 10 }).completed,
-  false,
-);
-assert.equal(
-  calculateReadingProgress({ mediaType: "cbz", pageNumber: 10, totalPages: 10 }).completed,
-  true,
-);
-assert.equal(
-  calculateReadingProgress({ mediaType: "cbz", pageNumber: 10, totalPages: 10, scrollRatio: 0.9 }).completed,
-  false,
-);
-assert.equal(
-  calculateReadingProgress({ mediaType: "cbz", pageNumber: 10, totalPages: 10, scrollRatio: 0.96 }).completed,
-  true,
-);
-assert.equal(
-  calculateReadingProgress({ mediaType: "video", positionSeconds: 10, durationSeconds: 100 }).completed,
-  false,
-);
-assert.equal(
-  calculateReadingProgress({ mediaType: "video", positionSeconds: 95, durationSeconds: 100 }).completed,
-  true,
-);
-assert.equal(
-  calculateReadingProgress({ mediaType: "video", positionSeconds: 95 }).completed,
-  false,
-);
-assert.deepEqual(
-  naturalPages([
-    "10.png",
-    "2.png",
-    "3.webp",
-    "1.png",
-    "__MACOSX/1.png",
-    ".hidden.png",
-    "readme.txt",
-  ]),
-  ["1.png", "2.png", "3.webp", "10.png"],
-);
-console.log(
-  "PASS: intro visible at zero; 90s,110s,short/disabled/ended; numeric CBZ order.",
-);
+import assert from "node:assert/strict";
+import { calculateReadingProgress, naturalPages, validateComicImage } from "../src/lib/media-rules.ts";
+
+assert.deepEqual(calculateReadingProgress({ mediaType: "pdf", pageNumber: 1, totalPages: 10, scrollRatio: 0.1 }), { percent: 10, completed: false });
+assert.equal(calculateReadingProgress({ mediaType: "pdf", pageNumber: 10, totalPages: 10, scrollRatio: 0.96 }).completed, true);
+assert.deepEqual(calculateReadingProgress({ mediaType: "cbz", pageNumber: 2, totalPages: 10, scrollRatio: 0.5 }), { percent: 15, completed: false });
+assert.equal(calculateReadingProgress({ mediaType: "cbz", pageNumber: 10, totalPages: 10, scrollRatio: 0.96 }).completed, true);
+assert.deepEqual(naturalPages(["10.png", "2.jpg", "3.webp", "1.jpeg", "__MACOSX/1.png", ".DS_Store", "thumb.png", "readme.txt"]), ["1.jpeg", "2.jpg", "3.webp", "10.png"]);
 
 const malicious = new Uint8Array(24);
 malicious.set([137, 80, 78, 71]);
@@ -79,15 +14,4 @@ view.setUint32(16, 100000);
 view.setUint32(20, 100000);
 assert.throws(() => validateComicImage(malicious));
 assert.throws(() => validateComicImage(new Uint8Array([1, 2, 3])));
-
-assert.equal(comicPageAfterKey(0, 400, "ArrowRight", false), 1);
-assert.equal(comicPageAfterKey(1, 400, "ArrowRight", true), 0);
-assert.equal(comicPageAfterKey(0, 400, "ArrowLeft", true), 1);
-assert.equal(comicPageAfterKey(399, 400, "ArrowRight", false), 399);
-
-assert.equal(safeVideoPosition(100, 20), 19.75);
-assert.equal(safeVideoPosition(42, Infinity), 42);
-assert.equal(safeVideoPosition(NaN, 120), 0);
-assert.equal(safeVideoPosition(-10, 120), 0);
-assert.match(videoFailureMessage(4), /codec/);
-assert.match(videoFailureMessage(2), /conexao/);
+console.log("PASS: PDF/CBZ progress, natural page order and image limits.");

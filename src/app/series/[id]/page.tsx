@@ -1,14 +1,14 @@
-/* eslint-disable @next/next/no-img-element -- Private signed and blob URLs must stay in the browser, avoiding an image proxy. */
 "use client";
-import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AuthGate } from "@/components/auth-gate";
 import { Nav } from "@/components/nav";
 import { Comments } from "@/components/comments";
+import { SeriesHeader } from "@/components/series/series-header";
+import { ChapterList } from "@/components/series/chapter-list";
 import { supabase } from "@/lib/supabase";
 import type { Series, Book, Volume, ReadingProgress } from "@/lib/types";
-import { formats, mediaHref } from "@/lib/catalog";
+import { getPrivateCoverUrl } from "@/lib/cover-url";
 import type { User } from "@supabase/supabase-js";
 export default function Page() {
   const { id } = useParams<{ id: string }>();
@@ -24,6 +24,23 @@ function Work({ id, user }: { id: string; user: User }) {
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(false);
+  const [lastRead, setLastRead] = useState<Pick<Book, "id" | "media_type"> | null>(null);
+  useEffect(() => {
+    let live = true;
+    void supabase().from("reading_progress")
+      .select("books!inner(id,media_type,series_id)")
+      .eq("owner_id", user.id)
+      .eq("books.series_id", id)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+      .then(({ data }) => {
+        const embedded = data?.books;
+        const book = (Array.isArray(embedded) ? embedded[0] : embedded) as Pick<Book, "id" | "media_type"> | null;
+        if (live) setLastRead(book || null);
+      });
+    return () => { live = false; };
+  }, [id, user.id]);
   useEffect(() => {
     let live = true;
     async function load() {
@@ -33,7 +50,7 @@ function Work({ id, user }: { id: string; user: User }) {
           api.from("series").select("id,owner_id,title,description,cover_path,format,beta_visible,rights_note").eq("id", id).single(),
           api
             .from("books")
-            .select("id,owner_id,title,original_filename,file_path,size_bytes,total_pages,created_at,series_id,volume_id,chapter_number,chapter_title,sort_order,content_type,media_type,skip_intro,intro_end")
+            .select("id,owner_id,title,original_filename,file_path,size_bytes,total_pages,created_at,series_id,volume_id,chapter_number,chapter_title,sort_order,content_type,media_type")
             .eq("series_id", id)
             .order("sort_order")
             .order("chapter_number")
@@ -50,7 +67,7 @@ function Work({ id, user }: { id: string; user: User }) {
         if (!live) return;
         const bookIds = (b.data || []).map((item) => item.id);
         const p = bookIds.length
-          ? await api.from("reading_progress").select("owner_id,book_id,page_number,line_index,scroll_ratio,reading_mode,updated_at,completed,position_seconds").eq("owner_id", user.id).in("book_id", bookIds)
+          ? await api.from("reading_progress").select("owner_id,book_id,page_number,line_index,scroll_ratio,reading_mode,updated_at,completed").eq("owner_id", user.id).in("book_id", bookIds)
           : { data: [], error: null };
         if (p.error) throw p.error;
         setSeries(s.data as Series);
@@ -59,10 +76,8 @@ function Work({ id, user }: { id: string; user: User }) {
         setVolumes(v.data || []);
         setProgress(p.data || []);
         if (s.data.cover_path) {
-          const { data } = await api.storage
-            .from("covers")
-            .createSignedUrl(s.data.cover_path, 3600);
-          if (live) setCover(data?.signedUrl || "");
+          const url = await getPrivateCoverUrl(user.id, s.data.cover_path).catch(() => "");
+          if (live) setCover(url);
         }
       } catch {
         if (live)
@@ -78,11 +93,7 @@ function Work({ id, user }: { id: string; user: User }) {
       live = false;
     };
   }, [id, user.id, page]);
-  const latest =
-    [...progress]
-      .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-      .map((p) => books.find((b) => b.id === p.book_id))
-      .find(Boolean) || books[0];
+  const latest = lastRead || books[0];
   return (
     <>
       <Nav back />
@@ -94,87 +105,8 @@ function Work({ id, user }: { id: string; user: User }) {
         ) : (
           series && (
             <>
-              <section className="series-hero">
-                <div className="series-hero-cover">
-                  {cover ? (
-                    <img src={cover} alt={`Capa de ${series.title}`} />
-                  ) : (
-                    <span>✦</span>
-                  )}
-                </div>
-                <div className="series-hero-copy">
-                  <span className="eyebrow">
-                    {formats[series.format || "novel"]}
-                  </span>
-                  <h1>{series.title}</h1>
-                  <p>
-                    {series.description ||
-                      "Esta história ainda não tem sinopse."}
-                  </p>
-                  {latest && (
-                    <Link className="primary-button" href={mediaHref(latest)}>
-                      {progress.some((p) => p.book_id === latest.id)
-                        ? "Continuar"
-                        : "Começar"}{" "}
-                      →
-                    </Link>
-                  )}
-                </div>
-              </section>
-              <section className="volumes-section">
-                <h2>
-                  {series.format === "anime"
-                    ? "Temporadas e episódios"
-                    : "Volumes e capítulos"}
-                </h2>
-                {books.map((b) => {
-                  const v = volumes.find((v) => v.id === b.volume_id);
-                  const p = progress.find((p) => p.book_id === b.id);
-                  return (
-                    <Link
-                      className="chapter-row"
-                      href={mediaHref(b)}
-                      key={b.id}
-                    >
-                      <span className="chapter-number">
-                        {b.chapter_number ?? "—"}
-                      </span>
-                      <div className="chapter-info">
-                        <strong>{b.chapter_title || b.title}</strong>
-                        <small>
-                          {v
-                            ? `${series.format === "anime" ? "Temporada" : "Volume"} ${v.volume_number ?? ""} · `
-                            : ""}
-                          {p
-                            ? "completed" in p && p.completed
-                              ? "Concluído"
-                              : series.format === "anime"
-                                ? "Em andamento"
-                                : `Página ${p.page_number}`
-                            : "Não iniciado"}
-                        </small>
-                      </div>
-                      <span>→</span>
-                    </Link>
-                  );
-                })}
-                {!books.length && (
-                  <p className="empty-state">
-                    Novos capítulos chegam em breve.
-                  </p>
-                )}
-                <div className="pagination">
-                  <button disabled={!page} onClick={() => setPage(page - 1)}>
-                    Anterior
-                  </button>
-                  <button
-                    disabled={!hasMore}
-                    onClick={() => setPage(page + 1)}
-                  >
-                    Mais capítulos
-                  </button>
-                </div>
-              </section>
+              <SeriesHeader series={series} cover={cover} continueBook={latest} started={Boolean(lastRead)} />
+              <ChapterList books={books} volumes={volumes} progress={progress} page={page} hasMore={hasMore} onPageChange={setPage} />
               <Comments seriesId={id} userId={user.id} />
             </>
           )

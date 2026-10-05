@@ -17,7 +17,7 @@ export function About({ onClose }: { onClose?: () => void }) {
         história. O resto pode esperar.
       </p>
       <div className="category-grid">
-        {["Light Novels", "Mangás", "Manhwas", "Animes"].map((x) => (
+        {["Light Novels", "Mangás", "Manhwas"].map((x) => (
           <article key={x}>
             <h2>{x}</h2>
           </article>
@@ -27,7 +27,7 @@ export function About({ onClose }: { onClose?: () => void }) {
         <p>
           <strong>Do ponto em que parou.</strong>
           <br />
-          Sua leitura e seus episódios acompanham sua conta.
+          Sua leitura acompanha sua conta.
         </p>
         <p>
           <strong>Uma história, muitas conversas.</strong>

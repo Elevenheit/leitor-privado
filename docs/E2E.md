@@ -6,4 +6,4 @@ Use a disposable Supabase project with the complete migration sequence. Disable 
 
 The suite provisions unique invited users, a revoked account, an admin, and an original one-page PDF. It tests login, signup/denial, catalog, PDF, bookmarks, favorites, comments, profile, logout, admin publication/moderation, and mobile overflow. It removes its own fixtures after execution. If interrupted, locate the unique E2E title and example.test accounts in the isolated project and clean those fixtures manually. No production records are used.
 
-Traces, videos and screenshots are disabled in authenticated tests to avoid recording credentials or private URLs. Browser tests with local original media remain `npm run test:browser` and do not mutate remote data. Authenticated E2E execution remains pending until the isolated environment is provided.
+Traces and screenshots are disabled in authenticated tests to avoid recording credentials or private URLs. Browser tests with local original reading files remain `npm run test:browser` and do not mutate remote data. Authenticated E2E execution remains pending until the isolated environment is provided.

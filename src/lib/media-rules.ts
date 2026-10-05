@@ -1,30 +1,8 @@
-export function introTarget(
-  enabled: boolean,
-  end: number,
-  duration: number,
-  time: number,
-): number | null {
-  if (
-    !enabled ||
-    !Number.isFinite(duration) ||
-    duration <= 0 ||
-    !Number.isFinite(end) ||
-    end < 90 ||
-    end > 110 ||
-    time >= Math.min(end, duration)
-  )
-    return null;
-  return Math.min(end, duration);
-}
-
 export type ReadingProgressInput = {
-  mediaType: "pdf" | "cbz" | "video";
+  mediaType: "pdf" | "cbz";
   pageNumber?: number;
   totalPages?: number | null;
   scrollRatio?: number;
-  positionSeconds?: number;
-  durationSeconds?: number;
-  reachedEnd?: boolean;
 };
 
 export function calculateReadingProgress(input: ReadingProgressInput) {
@@ -33,17 +11,6 @@ export function calculateReadingProgress(input: ReadingProgressInput) {
     : 0;
   const pageNumber = Math.max(1, input.pageNumber ?? 1);
   const totalPages = input.totalPages ?? 0;
-  if (input.mediaType === "video") {
-    const duration = input.durationSeconds ?? 0;
-    const position = Math.max(0, input.positionSeconds ?? 0);
-    const percent = duration > 0 ? Math.min(1, position / duration) : 0;
-    return {
-      percent: Math.round(percent * 100),
-      completed:
-        Boolean(input.reachedEnd) ||
-        (duration > 0 && position / duration >= 0.95),
-    };
-  }
   if (input.mediaType === "pdf") {
     return {
       percent: Math.round(ratio * 100),
@@ -51,14 +18,15 @@ export function calculateReadingProgress(input: ReadingProgressInput) {
         totalPages > 0 && pageNumber >= totalPages && ratio >= 0.95,
     };
   }
-  const pageRatio = totalPages > 0 ? Math.min(1, pageNumber / totalPages) : 0;
-  const percent = input.scrollRatio === undefined ? pageRatio : ratio;
+  const percent = totalPages > 0
+    ? Math.min(100, Math.round(((pageNumber - 1 + ratio) / totalPages) * 100))
+    : 0;
   return {
-    percent: Math.round(percent * 100),
+    percent,
     completed:
       totalPages > 0 &&
       pageNumber >= totalPages &&
-      (input.scrollRatio === undefined || ratio >= 0.95),
+      ratio >= 0.95,
   };
 }
 
@@ -67,8 +35,7 @@ export function naturalPages(names: string[]) {
     .filter(
       (n) =>
         /\.(png|jpe?g|webp)$/i.test(n) &&
-        !n.startsWith("__MACOSX/") &&
-        !n.split("/").some((p) => p.startsWith(".")),
+        !n.split("/").some((p) => p === "__MACOSX" || p.startsWith(".") || /^(?:thumbs?|thumbnails?)(?:\.[^.]+)?$/i.test(p)),
     )
     .sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
 }
@@ -140,19 +107,4 @@ export function validateComicImage(data: Uint8Array) {
   )
     throw Error("Página inválida ou com dimensões acima do limite seguro de 50 megapixels.");
   return { width, height };
-}
-
-export function comicPageAfterKey(page: number, count: number, key: string, rtl: boolean) {
-  const delta = (key === "ArrowRight" ? 1 : key === "ArrowLeft" ? -1 : 0) * (rtl ? -1 : 1);
-  return Math.max(0, Math.min(Math.max(0, count - 1), page + delta));
-}
-
-export function safeVideoPosition(position: number, duration: number) {
-  const seconds = Number.isFinite(position) ? Math.max(0, position) : 0;
-  return Number.isFinite(duration) && duration > 0 ? Math.min(seconds, Math.max(0, duration - 0.25)) : seconds;
-}
-export function videoFailureMessage(code: number | undefined) {
-  if (code === 3 || code === 4) return "Este navegador nao conseguiu decodificar o video. Tente outro navegador ou um arquivo MP4/WebM com codec compativel.";
-  if (code === 2) return "A conexao foi interrompida. Confira a rede e tente novamente.";
-  return "Nao foi possivel reproduzir o video. Confira o acesso e tente novamente.";
 }

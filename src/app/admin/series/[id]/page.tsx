@@ -48,13 +48,13 @@ function SeriesDetail({ user, id }: { user: User; id: string }) {
     const [s, v, b, allSeries, userVolumes] = await Promise.all([
       api.from("series").select("id,owner_id,title,description,cover_path,format,created_at,updated_at,tags,rights_note,beta_visible").eq("id", id).eq("owner_id", user.id).maybeSingle(),
       api.from("volumes").select("id,owner_id,series_id,volume_number,title,description,sort_order,created_at,updated_at").eq("series_id", id).eq("owner_id", user.id).order("sort_order").order("volume_number"),
-      api.from("books").select("id,owner_id,title,original_filename,file_path,size_bytes,total_pages,created_at,series_id,volume_id,chapter_number,chapter_title,sort_order,content_type,media_type,skip_intro,intro_end").eq("series_id", id).eq("owner_id", user.id).order("sort_order").order("chapter_number"),
+      api.from("books").select("id,owner_id,title,original_filename,file_path,size_bytes,total_pages,created_at,series_id,volume_id,chapter_number,chapter_title,sort_order,content_type,media_type").eq("series_id", id).eq("owner_id", user.id).order("sort_order").order("chapter_number"),
       api.from("series").select("id,title").eq("owner_id", user.id).order("title"),
       api.from("volumes").select("id,owner_id,series_id,volume_number,title,description,sort_order,created_at,updated_at").eq("owner_id", user.id).order("sort_order").order("volume_number"),
     ]);
     const bookIds = (b.data || []).map((item) => item.id);
     const p = bookIds.length
-      ? await api.from("reading_progress").select("owner_id,book_id,page_number,line_index,scroll_ratio,reading_mode,updated_at,completed,position_seconds").eq("owner_id", user.id).in("book_id", bookIds)
+      ? await api.from("reading_progress").select("owner_id,book_id,page_number,line_index,scroll_ratio,reading_mode,updated_at,completed").eq("owner_id", user.id).in("book_id", bookIds)
       : { data: [], error: null };
     const failure = s.error || v.error || b.error || p.error || allSeries.error || userVolumes.error;
     if (failure) setError(failure.message);
@@ -152,7 +152,7 @@ function SeriesDetail({ user, id }: { user: User; id: string }) {
 
 function ChapterList({ chapters, progress, onEdit }: { chapters: Book[]; progress: Record<string, ReadingProgress>; onEdit: (book: Book) => void }) {
   return <ol className="chapter-list">{chapters.map((book, index) => {
-    const saved = progress[book.id]; const measured = saved ? calculateReadingProgress({ mediaType: book.media_type, pageNumber: saved.page_number, totalPages: book.total_pages, scrollRatio: saved.scroll_ratio, positionSeconds: saved.position_seconds, reachedEnd: saved.completed }) : null; const done = measured?.completed || (book.media_type !== "pdf" && Boolean(saved?.completed)); const percent = done ? 100 : measured?.percent || 0;
+    const saved = progress[book.id]; const measured = saved ? calculateReadingProgress({ mediaType: book.media_type, pageNumber: saved.page_number, totalPages: book.total_pages, scrollRatio: saved.scroll_ratio }) : null; const done = Boolean(saved?.completed) || measured?.completed; const percent = done ? 100 : measured?.percent || 0;
     return <li className="chapter-row" key={book.id}><span className={`chapter-number ${book.content_type === "volume" ? "volume-number" : ""}`}>{book.content_type === "volume" ? `V${book.chapter_number ?? ""}` : book.chapter_number ?? index + 1}</span><div className="chapter-info"><Link href={mediaHref(book)}>{book.content_type === "volume" ? `Volume completo · ${book.chapter_title || book.title}` : book.chapter_title || book.title}</Link><small>{done ? "Concluído" : saved ? "Lendo" : "Não iniciado"}{saved && book.total_pages ? ` · ${percent}%` : ""}</small><div className="book-progress"><div style={{ width: `${percent}%` }}/></div></div><Link className="chapter-continue" href={mediaHref(book)}>{saved ? "Continuar" : "Ler"}<ChevronRight size={16}/></Link><button className="chapter-edit" onClick={() => onEdit(book)} aria-label="Editar capítulo ou mover"><Pencil size={15}/></button></li>;
   })}{!chapters.length && <li className="chapter-empty">Ainda não há capítulos neste volume.</li>}</ol>;
 }

@@ -1,7 +1,7 @@
 import { supabase } from "@/lib/supabase";
 import { throwOnError } from "./errors";
 
-const BOOK_COLUMNS = "id,owner_id,title,original_filename,file_path,size_bytes,total_pages,created_at,series_id,volume_id,chapter_number,chapter_title,sort_order,content_type,media_type,skip_intro,intro_end";
+const BOOK_COLUMNS = "id,owner_id,title,original_filename,file_path,size_bytes,total_pages,created_at,series_id,volume_id,chapter_number,chapter_title,sort_order,content_type,media_type";
 const SERIES_COLUMNS = "id,owner_id,title,description,cover_path,created_at,updated_at,format,tags,rights_note,beta_visible";
 const VOLUME_COLUMNS = "id,owner_id,series_id,volume_number,title,description,sort_order,created_at,updated_at";
 

@@ -36,8 +36,6 @@ export function readingStatus(book: Book, progress?: ReadingProgress) {
     pageNumber: progress.page_number,
     totalPages: book.total_pages,
     scrollRatio: progress.scroll_ratio,
-    positionSeconds: progress.position_seconds,
-    reachedEnd: progress.completed,
   });
   return measured.completed ? "Concluido" : "Em leitura";
 }

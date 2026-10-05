@@ -7,7 +7,7 @@ export type DataErrorKind =
   | "partial"
   | "unknown";
 
-export type ErrorOperation = "auth" | "supabase" | "storage" | "pdf" | "cbz" | "video";
+export type ErrorOperation = "auth" | "supabase" | "storage" | "pdf" | "cbz";
 export function reportDataError(error: unknown, operation: ErrorOperation) {
   if (process.env.NODE_ENV !== "development") return;
   console.warn("[nook]", { operation, kind: error instanceof DataError ? error.kind : "unknown" });

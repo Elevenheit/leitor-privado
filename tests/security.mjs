@@ -35,6 +35,7 @@ await db.exec(readFileSync("supabase/migrations/008_nonnegative_catalog_numbers.
 await db.exec(readFileSync("supabase/migrations/009_reader_navigation.sql", "utf8"));
 await db.exec(readFileSync("supabase/migrations/010_comment_report_rate_limit.sql", "utf8"));
 await db.exec(readFileSync("supabase/migrations/011_profile_storage_privacy.sql", "utf8"));
+await db.exec(readFileSync("supabase/migrations/012_reading_only.sql", "utf8"));
 await db.exec(
   `grant usage on schema public,auth,storage to authenticated; grant select,insert,update,delete on storage.objects to authenticated; grant execute on function auth.uid() to authenticated;`,
 );
@@ -61,6 +62,15 @@ async function asAnon(sql) {
     await db.exec("reset role");
   }
 }
+assert.deepEqual((await db.query("select allowed_mime_types from storage.buckets where id='novels'")).rows[0].allowed_mime_types, ["application/pdf", "application/zip", "application/vnd.comicbook+zip"]);
+await as(admin, `insert into storage.objects(bucket_id,name) values('novels','${admin}/sample.cbz')`);
+await assert.rejects(as(admin, `insert into storage.objects(bucket_id,name) values('novels','${admin}/sample.mp4')`));
+await assert.rejects(as(admin, `insert into storage.objects(bucket_id,name) values('novels','${admin}/sample.exe')`));
+await assert.rejects(as(admin, `insert into storage.objects(bucket_id,name) values('novels','${admin}/sample.js')`));
+await assert.rejects(as(admin, `insert into storage.objects(bucket_id,name) values('novels','${admin}/sample.html')`));
+await assert.rejects(as(a, `insert into storage.objects(bucket_id,name) values('novels','${a}/sample.cbz')`));
+await assert.rejects(as(admin, `insert into public.series(owner_id,title) values('${a}','Wrong owner')`));
+await assert.rejects(as(admin, `insert into public.books(owner_id,title,original_filename,file_path,size_bytes) values('${a}','Wrong owner','wrong.pdf','${a}/wrong.pdf',1)`));
 assert.equal(
   (await as(admin, "select * from reading_progress")).rows[0].page_number,
   7,

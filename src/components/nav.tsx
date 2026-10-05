@@ -15,7 +15,6 @@ import {
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
-  Play,
   Settings2,
   UserRound,
   X,
@@ -27,7 +26,6 @@ const links = [
   { href: "/category/novel", label: "Light Novels", icon: BookOpen },
   { href: "/category/manga", label: "Mangás", icon: BookImage },
   { href: "/category/manhwa", label: "Manhwas", icon: Layers },
-  { href: "/category/anime", label: "Animes", icon: Play },
   { href: "/list", label: "Minha lista", icon: Bookmark },
 ];
 

@@ -23,6 +23,7 @@ export function BatchUploadItem({ draft, index, running, onChange, onRetry, onRe
     <div className="batch-fields">
       <label>Ordem / capitulo<input type="number" min="0" step="any" value={draft.chapterNumber} onChange={event => onChange({ chapterNumber: event.target.value })} disabled={running || draft.status === "done"}/></label>
       <label>Titulo<input value={draft.title} onChange={event => onChange({ title: event.target.value })} disabled={running || draft.status === "done"}/></label>
+      <label>Tipo<select value={draft.mediaType} onChange={event => onChange({ mediaType: event.target.value as BatchDraft["mediaType"] })} disabled={running || draft.status === "done"}><option value="pdf">Light Novel</option><option value="cbz">Mangá / Manhwa</option></select></label>
     </div>
     {draft.status === "uploading" && <div className="upload-track"><div style={{ width: `${draft.percent}%` }}/></div>}
     {draft.error && <p className="batch-error" role="alert">{draft.error}</p>}

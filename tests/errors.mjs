@@ -10,7 +10,7 @@ const logs = [];
 const warn = console.warn;
 try {
   console.warn = (...args) => logs.push(args);
-  reportDataError({message: secret}, "video");
+  reportDataError({message: secret}, "cbz");
 } finally { console.warn = warn; process.env.NODE_ENV = previous; }
 assert.ok(!JSON.stringify(logs).includes("SECRET"));
 console.log("PASS: classified errors and logs omit raw credentials/URLs.");

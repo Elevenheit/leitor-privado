@@ -2,12 +2,12 @@ import { supabase } from "@/lib/supabase";
 import type { ReadingProgress } from "@/lib/types";
 import { throwOnError } from "./errors";
 
-export type ProgressUpdate = Partial<Pick<ReadingProgress, "page_number" | "line_index" | "scroll_ratio" | "reading_mode" | "position_seconds" | "completed">>;
+export type ProgressUpdate = Partial<Pick<ReadingProgress, "page_number" | "line_index" | "scroll_ratio" | "reading_mode" | "completed" | "page_count">>;
 
 const saveQueues = new Map<string, Promise<void>>();
 
 export async function listReadingProgress(ownerId: string) {
-  const result = await supabase().from("reading_progress").select("*").eq("owner_id", ownerId);
+  const result = await supabase().from("reading_progress").select("book_id,owner_id,page_number,line_index,scroll_ratio,reading_mode,updated_at,completed").eq("owner_id", ownerId);
   return throwOnError(result, "Não foi possível carregar seu progresso.") as ReadingProgress[];
 }
 

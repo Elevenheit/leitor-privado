@@ -9,7 +9,7 @@ const literata = Literata({ subsets: ["latin"], display: "swap", variable: "--fo
 
 export const metadata: Metadata = {
   title: "Nook — Biblioteca privada",
-  description: "Sua biblioteca privada de light novels.",
+  description: "Sua biblioteca privada de light novels, mangás e manhwas.",
   robots: { index: false, follow: false },
 };
 

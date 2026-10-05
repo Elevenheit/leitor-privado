@@ -7,7 +7,6 @@ export function securityHeaders(supabaseUrl?: string, development = false) {
     `script-src 'self' 'unsafe-inline'${development ? " 'unsafe-eval'" : ""}`,
     "style-src 'self' 'unsafe-inline'",
     `img-src 'self' data: blob: ${origin}`,
-    `media-src 'self' blob: ${origin}`,
     "font-src 'self' data:",
     "worker-src 'self' blob:",
     "object-src 'none'",
@@ -19,7 +18,7 @@ export function securityHeaders(supabaseUrl?: string, development = false) {
     { key: "X-Content-Type-Options", value: "nosniff" },
     { key: "Referrer-Policy", value: "no-referrer" },
     { key: "X-Frame-Options", value: "DENY" },
-    { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=(), usb=(), fullscreen=(self)" },
+    { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()" },
     { key: "Content-Security-Policy-Report-Only", value: csp },
   ];
 }

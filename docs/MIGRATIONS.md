@@ -14,10 +14,12 @@ As migrations versionadas e os arquivos SQL de bootstrap são a referência para
 8. `supabase/migrations/008_nonnegative_catalog_numbers.sql` permite capitulos e volumes numerados a partir de zero e rejeita negativos.
 9. `supabase/migrations/009_reader_navigation.sql` retorna somente os IDs anterior/proximo respeitando as policies RLS existentes.
 10. `supabase/migrations/010_comment_report_rate_limit.sql` limita denuncias repetidas por leitor, mantendo os registros antigos.
+11. `supabase/migrations/011_profile_storage_privacy.sql` restringe a escrita de imagens de perfil.
+12. `supabase/migrations/012_reading_only.sql` limita catálogo e Storage a PDF/CBZ e remove os campos de reprodução. Faça backup antes: a migration aborta se houver registros ou objetos antigos desse formato. Remova-os conscientemente após exportar o que precisar preservar; então reaplique a migration.
 
 ## Banco no estado anterior ao beta
 
-Confirme que o banco já tem o baseline, a migration 002 e a 004. Faça backup; execute a 005 uma única vez, promova a conta administradora conforme o procedimento acima e aplique as migrations 006, 007, 008, 009 e 010. A 005 transforma a chave e os dados de progresso, copia favoritos, cria perfis e substitui policies; não é uma migration segura para repetição. As correções 006 e 007 limitam comentários e mídia privada às obras visíveis.
+Confirme que o banco já tem o baseline, a migration 002 e a 004. Faça backup; execute a 005 uma única vez, promova a conta administradora conforme o procedimento acima e aplique as migrations 006 a 012 em ordem. A 005 transforma a chave e os dados de progresso, copia favoritos, cria perfis e substitui policies; não é uma migration segura para repetição. A 012 preserva PDFs existentes e recusa remover registros antigos implicitamente.
 
 ## Alterações futuras
 

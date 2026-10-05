@@ -12,14 +12,16 @@ webp.set(new TextEncoder().encode("VP8X"), 12);
 const cbz = (entries) => new File([zipSync(entries)], "test.cbz", { type: "application/zip" });
 await validateCbz(cbz({ "chapter/1.png": image }));
 await validateCbz(cbz({ "chapter/3.webp": webp }));
-for (const name of ["../evil.png", "C:/evil.png", "/evil.png", "page.html", "a/../../evil.png", "bad\u0000.png"]) {
+for (const name of ["../evil.png", "C:/evil.png", "/evil.png", "a/../../evil.png", "bad\u0000.png"]) {
   await assert.rejects(validateCbz(cbz({ [name]: image })), name);
 }
+assert.equal(await validateCbz(cbz({ "1.png": image, "page.html": new TextEncoder().encode("ignored"), "__MACOSX/._1.png": image, ".DS_Store": image, "thumb.png": image })), 1);
 await assert.rejects(validateCbz(new File([new Uint8Array([1, 2, 3])], "bad.cbz")));
 await assert.rejects(validateCbz(cbz({ "1.png": new TextEncoder().encode("not an image") })));
 await validateStorageUpload(new File(["%PDF-1.7\n"], "test.pdf"), "novels");
 await assert.rejects(validateStorageUpload(new File(["wrong"], "test.pdf"), "novels"));
 await assert.rejects(validateStorageUpload(new File(["0000ftyp"], "test.mp4", { type: "text/html" }), "novels"));
+await assert.rejects(validateStorageUpload(new File(["console.log(1)"], "test.js", { type: "text/javascript" }), "novels"));
 await validateImageUpload(new File([image], "image.png", { type: "image/png" }));
 await assert.rejects(validateImageUpload(new File(["bad"], "image.png", { type: "image/png" })));
 const huge = image.slice();

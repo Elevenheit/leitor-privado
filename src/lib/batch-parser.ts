@@ -6,7 +6,7 @@ export type ParsedBatchName = {
 };
 
 const volumePattern = /(?:^|[\s._-])(?:volume|vol\.?|v)[\s_-]*(\d+(?:[.,]\d+)?)/i;
-const chapterPattern = /(?:^|[\s._-])(?:cap(?:\u00ed|i)tulo|cap\.?|chapter|chap\.?|episode|epis(?:\u00f3|o)dio|ep\.?|c)[\s_-]*(\d+(?:[.,]\d+)?)/i;
+const chapterPattern = /(?:^|[\s._-])(?:cap(?:\u00ed|i)tulo|cap\.?|chapter|chap\.?|c)[\s_-]*(\d+(?:[.,]\d+)?)/i;
 const specialPattern = /(?:^|[\s._-])(pr(?:\u00f3|o)logo|prologue|ep(?:\u00ed|i)logo|epilogue)(?=$|[\s._-])/i;
 
 function escapeRegExp(value: string) {

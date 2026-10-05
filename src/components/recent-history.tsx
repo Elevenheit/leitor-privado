@@ -2,16 +2,17 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { ArrowUpRight, BookOpen, Play } from "lucide-react";
+import { ArrowUpRight, BookOpen } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { formats, mediaHref, type Format } from "@/lib/catalog";
 import { calculateReadingProgress } from "@/lib/media-rules";
+import { getPrivateCoverUrl } from "@/lib/cover-url";
 
 type RecentEntry = {
   book_id: string;
   page_number: number;
+  page_count: number | null;
   scroll_ratio: number;
-  position_seconds: number;
   completed: boolean;
   updated_at: string;
   books: {
@@ -33,26 +34,16 @@ type RecentEntry = {
 };
 
 function position(entry: RecentEntry) {
-  if (entry.books.media_type !== "pdf" && entry.completed) return { label: "Concluido", percent: 100 };
-  if (entry.books.media_type === "video") {
-    const seconds = Math.max(0, Math.floor(entry.position_seconds));
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const time = hours
-      ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`
-      : `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
-    return { label: `${time} assistidos`, percent: null };
-  }
-  const total = entry.books.total_pages;
+  if (entry.completed) return { label: "Concluído", percent: 100 };
+  const total = entry.books.total_pages || entry.page_count;
   const page = Math.max(1, entry.page_number);
   const measured = calculateReadingProgress({
     mediaType: entry.books.media_type === "cbz" ? "cbz" : "pdf",
     pageNumber: page,
     totalPages: total,
     scrollRatio: entry.scroll_ratio,
-    positionSeconds: entry.position_seconds,
   });
-  if (measured.completed) return { label: "Concluido", percent: 100 };
+  if (measured.completed) return { label: "Concluído", percent: 100 };
   return total && total > 0
     ? {
         label: `Página ${Math.min(page, total)} de ${total}`,
@@ -70,7 +61,7 @@ function chapter(entry: RecentEntry) {
       : volume?.title || book.title;
   }
   if (book.chapter_number != null) {
-    const label = `${book.media_type === "video" ? "Episódio" : "Capítulo"} ${book.chapter_number}`;
+    const label = `Capítulo ${book.chapter_number}`;
     return volume?.volume_number != null
       ? `Vol. ${volume.volume_number} · ${label}`
       : label;
@@ -102,7 +93,7 @@ export function RecentHistory({
         let query = api
           .from("reading_progress")
           .select(
-            "book_id,page_number,scroll_ratio,position_seconds,completed,updated_at,books!inner(id,title,media_type,total_pages,chapter_number,chapter_title,content_type,series!inner(id,title,format,cover_path),volumes(volume_number,title))",
+            "book_id,page_number,page_count,scroll_ratio,completed,updated_at,books!inner(id,title,media_type,total_pages,chapter_number,chapter_title,content_type,series!inner(id,title,format,cover_path),volumes(volume_number,title))",
           )
           .eq("owner_id", userId);
         if (format) query = query.eq("books.series.format", format);
@@ -123,10 +114,7 @@ export function RecentHistory({
         ];
         const signed = await Promise.all(
           paths.map(async (path) => {
-            const { data } = await api.storage
-              .from("covers")
-              .createSignedUrl(path, 3600);
-            return [path, data?.signedUrl || ""] as const;
+            return [path, await getPrivateCoverUrl(userId, path).catch(() => "")] as const;
           }),
         );
         if (live)
@@ -184,7 +172,6 @@ export function RecentHistory({
         {result.items.map((entry) => {
           const { books: book } = entry;
           const progress = position(entry);
-          const video = book.media_type === "video";
           const cover =
             book.series.cover_path && result.covers[book.series.cover_path];
           return (
@@ -225,8 +212,7 @@ export function RecentHistory({
                   </div>
                 )}
                 <span className="history-action">
-                  {video ? <Play size={12} aria-hidden="true" /> : null}
-                  {video ? "Continuar assistindo" : "Continuar lendo"}
+                  Continuar lendo
                   <ArrowUpRight size={14} aria-hidden="true" />
                 </span>
               </div>

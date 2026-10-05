@@ -3,7 +3,6 @@ import { CBZ_LIMITS, validateComicImage } from "./media-rules";
 
 const MiB = 1024 * 1024;
 const PDF_LIMIT = 500 * MiB;
-const VIDEO_LIMIT = 500 * MiB;
 const IMAGE_LIMIT = 2 * MiB;
 const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
@@ -79,9 +78,7 @@ export async function validateCbz(file: File) {
       throw new Error("O CBZ contém um caminho de arquivo inseguro.");
     }
     if (normalized.endsWith("/")) continue;
-    if (!/\.(png|jpe?g|webp)$/i.test(normalized) || normalized.startsWith("__MACOSX/") || normalized.split("/").some((part) => part.startsWith("."))) {
-      throw new Error("CBZ deve conter somente páginas PNG, JPEG ou WebP.");
-    }
+    if (!/\.(png|jpe?g|webp)$/i.test(normalized) || normalized.split("/").some((part) => part === "__MACOSX" || part.startsWith(".") || /^(?:thumbs?|thumbnails?)(?:\.[^.]+)?$/i.test(part))) continue;
     if (seen.has(normalized)) throw new Error("Nomes duplicados no CBZ.");
     seen.add(normalized);
     pageCount++;
@@ -93,7 +90,7 @@ export async function validateCbz(file: File) {
   if (!pageCount || pageCount > CBZ_LIMITS.pages || totalBytes > CBZ_LIMITS.total) {
     throw new Error("CBZ vazio ou acima do limite de 400 páginas / 160 MB.");
   }
-  for (const entry of entries.filter((item) => !item.name.endsWith("/"))) {
+  for (const entry of entries.filter((item) => seen.has(item.name.replaceAll("\\", "/")))) {
     const bytes = unzipSync(archive, { filter: (item) => item.name === entry.name })[entry.name];
     if (!bytes || bytes.length !== entry.uncompressed || crc32(bytes) !== entry.crc) throw new Error("Pagina CBZ corrompida.");
     const png = bytes[0] === 137 && bytes[1] === 80;
@@ -102,6 +99,7 @@ export async function validateCbz(file: File) {
     if ((/\.png$/i.test(entry.name) && !png) || (/\.jpe?g$/i.test(entry.name) && !jpeg) || (/\.webp$/i.test(entry.name) && !webp)) throw new Error("Pagina CBZ deve ser PNG, JPEG ou WebP real.");
     validateComicImage(bytes);
   }
+  return pageCount;
 }
 
 const crcTable = Uint32Array.from({ length: 256 }, (_, value) => {
@@ -136,20 +134,11 @@ export async function validateStorageUpload(file: File, bucket: "novels" | "cove
   if (bucket !== "novels") return validateImageUpload(file, bucket === "profiles" ? IMAGE_LIMIT : 10 * MiB);
   if (!file.size) throw new Error("Arquivo vazio.");
   const extension = extensionOf(file);
-  if (["mp4", "webm"].includes(extension) && file.type !== `video/${extension}`) throw new Error("MIME de video nao permitido.");
   const header = await readBytes(file, 0, Math.min(file.size, 16));
   if (extension === "pdf") {
     if (file.size > PDF_LIMIT || new TextDecoder().decode(header.slice(0, 5)) !== "%PDF-") throw new Error("PDF inválido ou maior que 500 MB.");
     return;
   }
   if (extension === "cbz") return validateCbz(file);
-  if (extension === "mp4") {
-    if (file.size > VIDEO_LIMIT || new TextDecoder().decode(header.slice(4, 8)) !== "ftyp") throw new Error("MP4 inválido ou maior que 500 MB.");
-    return;
-  }
-  if (extension === "webm") {
-    if (file.size > VIDEO_LIMIT || header[0] !== 0x1a || header[1] !== 0x45 || header[2] !== 0xdf || header[3] !== 0xa3) throw new Error("WebM inválido ou maior que 500 MB.");
-    return;
-  }
   throw new Error("Formato de mídia não suportado.");
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { MediaPublisher } from "@/components/media-publisher";
+import { CatalogAccess } from "@/components/admin/catalog-access";
 import { useRef, useState } from "react";
 import {
   BookOpen,
@@ -24,6 +24,7 @@ import { Nav } from "@/components/nav";
 import { supabase } from "@/lib/supabase";
 import { useAdminCatalog } from "@/components/admin/use-admin-catalog";
 import { calculateReadingProgress } from "@/lib/media-rules";
+import { validateCbz } from "@/lib/upload-validation";
 import { deleteBookAndFile, deleteSeriesAndMedia, replaceStorageReference, uploadAndRegisterBook } from "@/lib/data/uploads";
 import {
   formatSize,
@@ -34,7 +35,7 @@ import {
 import type { Format } from "@/lib/catalog";
 
 export function AdminDashboard({ user }: { user: User }) {
-  const { books, series, setSeries, volumes, setVolumes, progress, loading, coverUrls, load, error, setError } = useAdminCatalog(user.id);
+  const { books, setBooks, series, setSeries, volumes, setVolumes, progress, loading, coverUrls, load, error, setError } = useAdminCatalog(user.id);
   const [query, setQuery] = useState("");
   const [favoriteOnly, setFavoriteOnly] = useState(false);
   const [favoriteBusy, setFavoriteBusy] = useState<string | null>(null);
@@ -56,8 +57,6 @@ export function AdminDashboard({ user }: { user: User }) {
   const [contentType, setContentType] = useState<"chapter" | "volume">(
     "chapter",
   );
-  const [skipIntro, setSkipIntro] = useState(false);
-  const [introEnd, setIntroEnd] = useState(90);
   const [inlineSeriesTitle, setInlineSeriesTitle] = useState("");
   const [inlineSeriesFormat, setInlineSeriesFormat] = useState<Format>("novel");
   const [inlineVolumeNumber, setInlineVolumeNumber] = useState("");
@@ -197,9 +196,11 @@ export function AdminDashboard({ user }: { user: User }) {
       })
       .eq("id", editingSeries.id)
       .eq("owner_id", user.id);
-    if (updateError) setError(updateError.message);
-    else setEditingSeries(null);
-    await load();
+    if (updateError) setError("Não foi possível salvar a obra.");
+    else {
+      setSeries(previous => previous.map(item => item.id === editingSeries.id ? { ...item, title: editTitle.trim(), description: editDescription.trim() || null } : item));
+      setEditingSeries(null);
+    }
     setBusy(false);
   }
 
@@ -252,7 +253,7 @@ export function AdminDashboard({ user }: { user: User }) {
       return;
     }
     const extension = file.name.split(".").pop()?.toLowerCase() || "";
-    const mediaType = selectedFormat === "novel" ? "pdf" : selectedFormat === "anime" ? "video" : "cbz";
+    const mediaType = selectedFormat === "novel" ? "pdf" : "cbz";
     if (mediaType === "pdf" && extension !== "pdf") {
       setError("Escolha um arquivo PDF.");
       return;
@@ -268,15 +269,13 @@ export function AdminDashboard({ user }: { user: User }) {
     } else {
       const bytes = new Uint8Array(await file.slice(0, 16).arrayBuffer());
       if (mediaType === "cbz" && (extension !== "cbz" || file.size > 40 * 1024 * 1024 || bytes[0] !== 80 || bytes[1] !== 75)) { setError("Use um arquivo CBZ ZIP válido de até 40 MB."); return; }
-      if (mediaType === "video" && (!(["mp4", "webm"].includes(extension)) || file.size > 500 * 1024 * 1024)) { setError("Use MP4 ou WebM de até 500 MB."); return; }
-      if (mediaType === "video" && extension === "mp4" && new TextDecoder().decode(bytes.slice(4, 8)) !== "ftyp") { setError("MP4 inválido."); return; }
-      if (mediaType === "video" && extension === "webm" && !(bytes[0] === 26 && bytes[1] === 69 && bytes[2] === 223 && bytes[3] === 163)) { setError("WebM inválido."); return; }
     }
     const path = `${user.id}/${selectedSeries}/${selectedVolume || "unassigned"}/${crypto.randomUUID()}.${extension}`;
     setUploading(true);
     setUploadPercent(0);
     try {
-      const objectType = mediaType === "pdf" ? "application/pdf" : mediaType === "cbz" ? "application/zip" : extension === "mp4" ? "video/mp4" : "video/webm";
+      const objectType = mediaType === "pdf" ? "application/pdf" : "application/zip";
+      const totalPages = mediaType === "cbz" ? await validateCbz(file) : null;
       await uploadAndRegisterBook({
         owner_id: user.id,
         title:
@@ -297,9 +296,8 @@ export function AdminDashboard({ user }: { user: User }) {
           : 0,
         content_type: contentType,
         media_type: mediaType,
-        skip_intro: mediaType === "video" && skipIntro,
-        intro_end: introEnd,
-      }, file, objectType, { resumable: mediaType === "pdf", onProgress: setUploadPercent });
+        total_pages: totalPages,
+      }, file, objectType, { resumable: true, onProgress: setUploadPercent });
       setFile(null);
       setChapterNumber("");
       setChapterTitle("");
@@ -357,9 +355,11 @@ export function AdminDashboard({ user }: { user: User }) {
       })
       .eq("id", editingBook.id)
       .eq("owner_id", user.id);
-    if (updateError) setError(updateError.message);
-    else setEditingBook(null);
-    await load();
+    if (updateError) setError("Não foi possível salvar o capítulo.");
+    else {
+      setBooks(previous => previous.map(item => item.id === editingBook.id ? { ...item, title: editChapterTitle.trim(), chapter_title: editChapterTitle.trim(), chapter_number, sort_order: chapter_number !== null ? Math.round(chapter_number * 1000) : item.sort_order } : item));
+      setEditingBook(null);
+    }
   }
 
   const match = (value: string) =>
@@ -404,21 +404,19 @@ export function AdminDashboard({ user }: { user: User }) {
         pageNumber: progress[recent.id].page_number,
         totalPages: recent.total_pages,
         scrollRatio: progress[recent.id].scroll_ratio,
-        positionSeconds: progress[recent.id].position_seconds,
-        reachedEnd: progress[recent.id].completed,
       }).percent
     : 0;
   const relevantVolumes = volumes.filter((v) => v.series_id === selectedSeries);
   const selectedSeriesData = series.find((item) => item.id === selectedSeries);
   const selectedFormat = selectedSeriesData?.format || null;
-  const formatLabel = selectedFormat === "novel" ? "Light Novel" : selectedFormat === "manga" ? "Mangá" : selectedFormat === "manhwa" ? "Manhwa" : selectedFormat === "anime" ? "Anime" : "";
-  const acceptedMedia = selectedFormat === "novel" ? ".pdf,application/pdf" : selectedFormat === "manga" || selectedFormat === "manhwa" ? ".cbz,application/zip,application/vnd.comicbook+zip" : selectedFormat === "anime" ? ".mp4,.webm,video/mp4,video/webm" : undefined;
+  const formatLabel = selectedFormat === "novel" ? "Light Novel" : selectedFormat === "manga" ? "Mangá" : selectedFormat === "manhwa" ? "Manhwa" : "";
+  const acceptedMedia = selectedFormat === "novel" ? ".pdf,application/pdf" : selectedFormat ? ".cbz,application/zip,application/vnd.comicbook+zip" : undefined;
 
   return (
     <>
       <Nav />
       <main className="dashboard">
-        <MediaPublisher userId={user.id} />
+        <CatalogAccess ownerId={user.id} />
         {recent && (
           <section className="continue-card">
             <div
@@ -535,7 +533,7 @@ export function AdminDashboard({ user }: { user: User }) {
               </button>
             </div>
             <span className="muted">
-              {books.length} {books.length === 1 ? "PDF" : "PDFs"}
+              {books.length} {books.length === 1 ? "arquivo" : "arquivos"}
             </span>
           </div>
           {loading ? (
@@ -648,7 +646,7 @@ export function AdminDashboard({ user }: { user: User }) {
                   <div className="section-head">
                     <div>
                       <span className="eyebrow">
-                        PDFs antigos e não organizados
+                        Arquivos sem obra
                       </span>
                       <h2>
                         Sem coleção{" "}
@@ -684,7 +682,7 @@ export function AdminDashboard({ user }: { user: User }) {
                           </button>
                           <button
                             onClick={() => void deleteBook(book)}
-                            aria-label="Excluir PDF"
+                            aria-label="Excluir arquivo"
                           >
                             <Trash2 size={16} />
                           </button>
@@ -710,7 +708,7 @@ export function AdminDashboard({ user }: { user: User }) {
                         ? "Marque uma obra com a estrela para encontrá-la aqui."
                         : query
                           ? "Tente outro termo de busca."
-                          : "Crie uma obra ou envie um PDF para começar."}
+                          : "Crie uma obra ou envie um arquivo para começar."}
                     </p>
                     {!favoriteOnly && (
                       <button
@@ -766,7 +764,6 @@ export function AdminDashboard({ user }: { user: User }) {
                   <option value="novel">Light Novel</option>
                   <option value="manga">Mangá</option>
                   <option value="manhwa">Manhwa</option>
-                  <option value="anime">Anime</option>
                 </select>
               </label>
               <label>
@@ -856,7 +853,6 @@ export function AdminDashboard({ user }: { user: User }) {
                     <option value="novel">Light Novel</option>
                     <option value="manga">Mangá</option>
                     <option value="manhwa">Manhwa</option>
-                    <option value="anime">Anime</option>
                   </select>
                   <button
                     type="button"
@@ -920,10 +916,6 @@ export function AdminDashboard({ user }: { user: User }) {
                 </>
               )}
               {selectedFormat && <p>Tipo: {formatLabel}</p>}
-              {selectedFormat === "anime" && <>
-                <label><span>Habilitar pular abertura</span><input type="checkbox" checked={skipIntro} onChange={(e) => setSkipIntro(e.target.checked)} /></label>
-                <label>Destino da abertura em segundos<input type="number" min="90" max="110" value={introEnd} onChange={(e) => setIntroEnd(Number(e.target.value))} /></label>
-              </>}
               {selectedFormat === "novel" && <label>
                 Tipo do conteúdo
                 <select
@@ -981,7 +973,7 @@ export function AdminDashboard({ user }: { user: User }) {
                 <UploadCloud size={19} />
                 {uploading
                   ? `Enviando… ${uploadPercent}%`
-                  : file?.name || (selectedFormat === "novel" ? "Arraste o PDF ou escolha acima" : selectedFormat === "anime" ? "Arraste o MP4/WebM ou escolha acima" : selectedFormat ? "Arraste o CBZ ou escolha acima" : "Selecione uma obra primeiro")}
+                  : file?.name || (selectedFormat === "novel" ? "Arraste o PDF ou escolha acima" : selectedFormat ? "Arraste o CBZ ou escolha acima" : "Selecione uma obra primeiro")}
                 {uploading && (
                   <div className="upload-track">
                     <div style={{ width: `${uploadPercent}%` }} />
@@ -993,7 +985,7 @@ export function AdminDashboard({ user }: { user: User }) {
                 disabled={!file || !selectedSeries || uploading}
                 onClick={() => void uploadFile()}
               >
-                {uploading ? "Enviando…" : selectedFormat === "novel" ? "Enviar PDF" : selectedFormat === "anime" ? "Enviar episódio" : "Enviar capítulo"}
+                {uploading ? "Enviando…" : selectedFormat === "novel" ? "Enviar PDF" : "Enviar capítulo"}
               </button>
             </section>
           </div>
@@ -1141,13 +1133,13 @@ export function AdminDashboard({ user }: { user: User }) {
             }
             message={
               deleteTarget.type === "series"
-                ? "A organização será removida. Os PDFs e o progresso serão preservados e passarão para Sem coleção."
-                : "O arquivo PDF e o progresso de leitura serão excluídos permanentemente."
+                ? "A organização será removida. Os arquivos e o progresso serão preservados e passarão para Sem coleção."
+                : "O arquivo e o progresso de leitura serão excluídos permanentemente."
             }
             confirmLabel={
               deleteTarget.type === "series"
                 ? "Excluir organização"
-                : "Excluir PDF e progresso"
+                : "Excluir arquivo e progresso"
             }
             busy={busy}
             onCancel={() => setDeleteTarget(null)}
