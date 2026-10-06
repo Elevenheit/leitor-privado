@@ -20,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { catalogContextKey, clearCatalogContexts } from "@/lib/catalog-context";
 
 const links = [
   { href: "/", label: "Início", icon: Home },
@@ -35,6 +36,7 @@ export function Nav({ back = false }: { back?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [admin, setAdmin] = useState(false);
+  const [backHref, setBackHref] = useState("/");
   const [profile, setProfile] = useState({ name: "Meu espaço", avatar: "" });
   const drawer = useRef<HTMLDialogElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -49,6 +51,19 @@ export function Nav({ back = false }: { back?: boolean }) {
         const { data: session } = await api.auth.getSession();
         const userId = session.session?.user.id;
         if (!userId) return;
+        try {
+          const route = sessionStorage.getItem(
+            catalogContextKey(userId, "last-route"),
+          );
+          if (
+            live &&
+            route &&
+            /^(\/|\/list|\/category\/(novel|manga|manhwa))$/.test(route)
+          )
+            setBackHref(route);
+        } catch {
+          /* The home route remains available without session storage. */
+        }
         const { data: access } = await api
           .from("beta_access")
           .select("role, expires_at, revoked")
@@ -216,6 +231,7 @@ export function Nav({ back = false }: { back?: boolean }) {
           <button
             onClick={() => {
               closeMenus();
+              clearCatalogContexts();
               void supabase().auth.signOut();
             }}
           >
@@ -233,11 +249,14 @@ export function Nav({ back = false }: { back?: boolean }) {
       data-immersive={immersive}
       ref={root}
     >
+      <a className="skip-link" href="#main-content">
+        Pular para o conteúdo
+      </a>
       <aside className="navigation-rail" aria-label="Navegação do Nook">
         <Link
-          href="/"
+          href={back ? backHref : "/"}
           className="rail-brand"
-          aria-label={back ? "Nook, voltar ao início" : "Nook, início"}
+          aria-label={back ? "Nook, voltar à biblioteca" : "Nook, início"}
         >
           n<span className="rail-wordmark">ook</span>
           <span className="logo-dot">.</span>

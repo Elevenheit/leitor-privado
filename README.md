@@ -20,6 +20,8 @@ Use Node 24.21 (versão verificada) e preencha somente as duas variáveis públi
 
 `supabase/schema.sql` é somente o baseline histórico anterior ao beta, não um snapshot atual. Para banco vazio ou clone existente, siga a sequência em `docs/MIGRATIONS.md`.
 
+A interface restaurada usa as tabelas e a configuração existentes, sem RPCs novas, migration 013, integrações externas ou mudanças no comando de build do Render. Preferências preservam os campos atuais e progresso usa o upsert original. Não execute o baseline ou migrations para corrigir esta versão da interface.
+
 - [Configuração, backup, reversão e roteiro de sete dias](docs/BETA.md)
 - [Sequência de migrations](docs/MIGRATIONS.md)
 - [Resultados e limitações de cada recurso](docs/STATUS.md)

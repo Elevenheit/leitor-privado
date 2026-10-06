@@ -4,7 +4,6 @@ import Link from "next/link";
 import { CatalogAccess } from "@/components/admin/catalog-access";
 import { useRef, useState } from "react";
 import {
-  BookOpen,
   ChevronRight,
   FilePlus2,
   FileText,
@@ -23,21 +22,40 @@ import { ConfirmDialog } from "@/components/modals/confirm-dialog";
 import { Nav } from "@/components/nav";
 import { supabase } from "@/lib/supabase";
 import { useAdminCatalog } from "@/components/admin/use-admin-catalog";
-import { calculateReadingProgress } from "@/lib/media-rules";
-import { validateCbz } from "@/lib/upload-validation";
-import { deleteBookAndFile, deleteSeriesAndMedia, replaceStorageReference, uploadAndRegisterBook } from "@/lib/data/uploads";
+import { SeriesPicker, VolumePicker } from "./library-picker";
+import { SeriesCover } from "@/components/series/series-cover";
+import { mediaHref } from "@/lib/catalog";
+import { validateCbz, validateImageUpload } from "@/lib/upload-validation";
 import {
-  formatSize,
-  type Book,
-  type Series,
-  type Volume,
-} from "@/lib/types";
+  deleteBookAndFile,
+  deleteSeriesAndMedia,
+  findDuplicateBook,
+  replaceStorageReference,
+  uploadAndRegisterBook,
+} from "@/lib/data/uploads";
+import { formatSize, type Book, type Series, type Volume } from "@/lib/types";
 import type { Format } from "@/lib/catalog";
+import { nextVolumeOrder } from "@/lib/data/admin";
 
 export function AdminDashboard({ user }: { user: User }) {
-  const { books, setBooks, series, setSeries, volumes, setVolumes, progress, loading, coverUrls, load, error, setError } = useAdminCatalog(user.id);
   const [query, setQuery] = useState("");
   const [favoriteOnly, setFavoriteOnly] = useState(false);
+  const [page, setPage] = useState(0);
+  const {
+    books,
+    setBooks,
+    series,
+    setSeries,
+    loading,
+    coverUrls,
+    load,
+    error,
+    setError,
+    totalCount,
+    looseCount,
+    fileCount,
+    hasMore,
+  } = useAdminCatalog(user.id, page, query, favoriteOnly);
   const [favoriteBusy, setFavoriteBusy] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -52,6 +70,10 @@ export function AdminDashboard({ user }: { user: User }) {
   const [newFormat, setNewFormat] = useState<Format>("novel");
   const [selectedSeries, setSelectedSeries] = useState("");
   const [selectedVolume, setSelectedVolume] = useState("");
+  const [selectedWork, setSelectedWork] = useState<Series | null>(null);
+  const [selectedVolumeItem, setSelectedVolumeItem] = useState<Volume | null>(
+    null,
+  );
   const [chapterNumber, setChapterNumber] = useState("");
   const [chapterTitle, setChapterTitle] = useState("");
   const [contentType, setContentType] = useState<"chapter" | "volume">(
@@ -75,23 +97,42 @@ export function AdminDashboard({ user }: { user: User }) {
   >(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const addMenuRef = useRef<HTMLDetailsElement>(null);
+  const operation = useRef(false);
+  async function runAction(action: () => Promise<void>) {
+    if (operation.current) return;
+    operation.current = true;
+    setBusy(true);
+    try {
+      await action();
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Não foi possível concluir. Tente novamente.",
+      );
+    } finally {
+      operation.current = false;
+      setBusy(false);
+    }
+  }
 
   async function createSeries() {
     const title = newTitle.trim();
     if (!title) return;
     setBusy(true);
     setError("");
+    if (coverFile) await validateImageUpload(coverFile);
     const { data: created, error: saveError } = await supabase()
-  .from("series")
-  .insert({
-    owner_id: user.id,
-    title,
-    description: newDescription.trim() || null,
-    format: newFormat,
-    beta_visible: true,
-  })
-  .select()
-  .single();
+      .from("series")
+      .insert({
+        owner_id: user.id,
+        title,
+        description: newDescription.trim() || null,
+        format: newFormat,
+        beta_visible: false,
+      })
+      .select()
+      .single();
     if (saveError) setError(saveError.message);
     else {
       if (coverFile && created) {
@@ -108,16 +149,34 @@ export function AdminDashboard({ user }: { user: User }) {
             : coverFile.type.split("/")[1];
         const path = `${user.id}/${created.id}/${crypto.randomUUID()}.${ext}`;
         try {
-          await replaceStorageReference("covers", path, coverFile, coverFile.type, async (coverPath) => {
-            const linked = await supabase().from("series").update({ cover_path: coverPath }).eq("id", created.id).select("id").single();
-            if (linked.error) throw linked.error;
-          }, async (coverPath) => {
-            const current = await supabase().from("series").select("cover_path").eq("id", created.id).maybeSingle();
-            if (current.error) throw current.error;
-            return current.data?.cover_path === coverPath;
-          });
+          await replaceStorageReference(
+            "covers",
+            path,
+            coverFile,
+            coverFile.type,
+            async (coverPath) => {
+              const linked = await supabase()
+                .from("series")
+                .update({ cover_path: coverPath })
+                .eq("id", created.id)
+                .select("id")
+                .single();
+              if (linked.error) throw linked.error;
+            },
+            async (coverPath) => {
+              const current = await supabase()
+                .from("series")
+                .select("cover_path")
+                .eq("id", created.id)
+                .maybeSingle();
+              if (current.error) throw current.error;
+              return current.data?.cover_path === coverPath;
+            },
+          );
         } catch (cause) {
-          setError(`Obra criada, mas a capa não foi vinculada: ${cause instanceof Error ? cause.message : "falha no Storage ou no catálogo."}`);
+          setError(
+            `Obra criada, mas a capa não foi vinculada: ${cause instanceof Error ? cause.message : "falha no Storage ou no catálogo."}`,
+          );
         }
       }
       setNewTitle("");
@@ -134,18 +193,18 @@ export function AdminDashboard({ user }: { user: User }) {
     const title = inlineSeriesTitle.trim();
     if (!title) return;
     const { data, error: saveError } = await supabase()
-  .from("series")
-  .insert({
-    owner_id: user.id,
-    title,
-    format: inlineSeriesFormat,
-    beta_visible: true,
-  })
-  .select()
-  .single();
+      .from("series")
+      .insert({
+        owner_id: user.id,
+        title,
+        format: inlineSeriesFormat,
+        beta_visible: false,
+      })
+      .select()
+      .single();
     if (saveError) setError(saveError.message);
     else {
-      setSeries((previous) => [...previous, data as Series]);
+      setSelectedWork(data as Series);
       setSelectedSeries(data.id);
       setCreateSeriesInline(false);
       setInlineSeriesTitle("");
@@ -164,13 +223,16 @@ export function AdminDashboard({ user }: { user: User }) {
         series_id: selectedSeries,
         volume_number: number,
         title: inlineVolumeTitle.trim() || null,
-        sort_order: number !== null ? Math.round(number * 1000) : volumes.length * 1000,
+        sort_order:
+          number !== null
+            ? Math.round(number * 1000)
+            : await nextVolumeOrder(user.id, selectedSeries),
       })
       .select()
       .single();
     if (saveError) setError(saveError.message);
     else {
-      setVolumes((previous) => [...previous, data as Volume]);
+      setSelectedVolumeItem(data as Volume);
       setSelectedVolume(data.id);
       setCreateVolumeInline(false);
       setInlineVolumeNumber("");
@@ -198,7 +260,17 @@ export function AdminDashboard({ user }: { user: User }) {
       .eq("owner_id", user.id);
     if (updateError) setError("Não foi possível salvar a obra.");
     else {
-      setSeries(previous => previous.map(item => item.id === editingSeries.id ? { ...item, title: editTitle.trim(), description: editDescription.trim() || null } : item));
+      setSeries((previous) =>
+        previous.map((item) =>
+          item.id === editingSeries.id
+            ? {
+                ...item,
+                title: editTitle.trim(),
+                description: editDescription.trim() || null,
+              }
+            : item,
+        ),
+      );
       setEditingSeries(null);
     }
     setBusy(false);
@@ -210,8 +282,14 @@ export function AdminDashboard({ user }: { user: User }) {
     setFavoriteBusy(item.id);
     const next = !item.is_favorite;
     const { error: updateError } = next
-      ? await supabase().from("favorites").upsert({owner_id:user.id,series_id:item.id})
-      : await supabase().from("favorites").delete().eq("owner_id",user.id).eq("series_id",item.id);
+      ? await supabase()
+          .from("favorites")
+          .upsert({ owner_id: user.id, series_id: item.id })
+      : await supabase()
+          .from("favorites")
+          .delete()
+          .eq("owner_id", user.id)
+          .eq("series_id", item.id);
     if (updateError)
       setError(
         `Não foi possível alterar o favorito. Verifique sua conexão. ${updateError.message}`,
@@ -238,7 +316,11 @@ export function AdminDashboard({ user }: { user: User }) {
       await deleteSeriesAndMedia(user.id, item);
       setDeleteTarget(null);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Não foi possível excluir a obra.");
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Não foi possível excluir a obra.",
+      );
     }
     await load();
     setBusy(false);
@@ -247,8 +329,12 @@ export function AdminDashboard({ user }: { user: User }) {
   async function uploadFile() {
     if (!file || uploading || !selectedSeries || !selectedFormat) return;
     setError("");
-    const parsedChapterNumber = chapterNumber.trim() !== "" ? Number(chapterNumber) : null;
-    if (parsedChapterNumber !== null && (!Number.isFinite(parsedChapterNumber) || parsedChapterNumber < 0)) {
+    const parsedChapterNumber =
+      chapterNumber.trim() !== "" ? Number(chapterNumber) : null;
+    if (
+      parsedChapterNumber !== null &&
+      (!Number.isFinite(parsedChapterNumber) || parsedChapterNumber < 0)
+    ) {
       setError("O número do capítulo deve ser zero ou maior.");
       return;
     }
@@ -259,45 +345,62 @@ export function AdminDashboard({ user }: { user: User }) {
       return;
     }
     if (mediaType === "pdf") {
-    const signature = new TextDecoder().decode(
-      await file.slice(0, 5).arrayBuffer(),
-    );
-    if (signature !== "%PDF-") {
-      setError("Este arquivo não parece ser um PDF válido.");
-      return;
-    }
+      const signature = new TextDecoder().decode(
+        await file.slice(0, 5).arrayBuffer(),
+      );
+      if (signature !== "%PDF-") {
+        setError("Este arquivo não parece ser um PDF válido.");
+        return;
+      }
     } else {
       const bytes = new Uint8Array(await file.slice(0, 16).arrayBuffer());
-      if (mediaType === "cbz" && (extension !== "cbz" || file.size > 40 * 1024 * 1024 || bytes[0] !== 80 || bytes[1] !== 75)) { setError("Use um arquivo CBZ ZIP válido de até 40 MB."); return; }
+      if (
+        mediaType === "cbz" &&
+        (extension !== "cbz" ||
+          file.size > 40 * 1024 * 1024 ||
+          bytes[0] !== 80 ||
+          bytes[1] !== 75)
+      ) {
+        setError("Use um arquivo CBZ ZIP válido de até 40 MB.");
+        return;
+      }
     }
     const path = `${user.id}/${selectedSeries}/${selectedVolume || "unassigned"}/${crypto.randomUUID()}.${extension}`;
     setUploading(true);
     setUploadPercent(0);
     try {
-      const objectType = mediaType === "pdf" ? "application/pdf" : "application/zip";
+      await findDuplicateBook(selectedSeries, file.name);
+      const objectType =
+        mediaType === "pdf" ? "application/pdf" : "application/zip";
       const totalPages = mediaType === "cbz" ? await validateCbz(file) : null;
-      await uploadAndRegisterBook({
-        owner_id: user.id,
-        title:
-          chapterTitle.trim() ||
-          file.name
-            .replace(/\.pdf$/i, "")
-            .replace(/[_-]+/g, " ")
-            .trim(),
-        original_filename: file.name,
-        file_path: path,
-        size_bytes: file.size,
-        series_id: selectedSeries || null,
-        volume_id: selectedVolume || null,
-        chapter_number: parsedChapterNumber,
-        chapter_title: chapterTitle.trim() || null,
-        sort_order: parsedChapterNumber !== null
-          ? Math.round(parsedChapterNumber * 1000)
-          : 0,
-        content_type: contentType,
-        media_type: mediaType,
-        total_pages: totalPages,
-      }, file, objectType, { resumable: true, onProgress: setUploadPercent });
+      await uploadAndRegisterBook(
+        {
+          owner_id: user.id,
+          title:
+            chapterTitle.trim() ||
+            file.name
+              .replace(/\.pdf$/i, "")
+              .replace(/[_-]+/g, " ")
+              .trim(),
+          original_filename: file.name,
+          file_path: path,
+          size_bytes: file.size,
+          series_id: selectedSeries || null,
+          volume_id: selectedVolume || null,
+          chapter_number: parsedChapterNumber,
+          chapter_title: chapterTitle.trim() || null,
+          sort_order:
+            parsedChapterNumber !== null
+              ? Math.round(parsedChapterNumber * 1000)
+              : 0,
+          content_type: contentType,
+          media_type: mediaType,
+          total_pages: totalPages,
+        },
+        file,
+        objectType,
+        { resumable: true, onProgress: setUploadPercent },
+      );
       setFile(null);
       setChapterNumber("");
       setChapterTitle("");
@@ -322,7 +425,11 @@ export function AdminDashboard({ user }: { user: User }) {
       await deleteBookAndFile(user.id, book);
       setDeleteTarget(null);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Não foi possível excluir o arquivo.");
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Não foi possível excluir o arquivo.",
+      );
     }
     await load();
     setBusy(false);
@@ -339,7 +446,10 @@ export function AdminDashboard({ user }: { user: User }) {
     const chapter_number = editChapterNumber.trim()
       ? Number(editChapterNumber)
       : null;
-    if (chapter_number !== null && (!Number.isFinite(chapter_number) || chapter_number < 0)) {
+    if (
+      chapter_number !== null &&
+      (!Number.isFinite(chapter_number) || chapter_number < 0)
+    ) {
       setError("O número do capítulo deve ser zero ou maior.");
       return;
     }
@@ -349,115 +459,65 @@ export function AdminDashboard({ user }: { user: User }) {
         chapter_title: editChapterTitle.trim(),
         title: editChapterTitle.trim(),
         chapter_number,
-        sort_order: chapter_number !== null
-          ? Math.round(chapter_number * 1000)
-          : editingBook.sort_order,
+        sort_order:
+          chapter_number !== null
+            ? Math.round(chapter_number * 1000)
+            : editingBook.sort_order,
       })
       .eq("id", editingBook.id)
       .eq("owner_id", user.id);
     if (updateError) setError("Não foi possível salvar o capítulo.");
     else {
-      setBooks(previous => previous.map(item => item.id === editingBook.id ? { ...item, title: editChapterTitle.trim(), chapter_title: editChapterTitle.trim(), chapter_number, sort_order: chapter_number !== null ? Math.round(chapter_number * 1000) : item.sort_order } : item));
+      setBooks((previous) =>
+        previous.map((item) =>
+          item.id === editingBook.id
+            ? {
+                ...item,
+                title: editChapterTitle.trim(),
+                chapter_title: editChapterTitle.trim(),
+                chapter_number,
+                sort_order:
+                  chapter_number !== null
+                    ? Math.round(chapter_number * 1000)
+                    : item.sort_order,
+              }
+            : item,
+        ),
+      );
       setEditingBook(null);
     }
   }
 
-  const match = (value: string) =>
-    value.toLocaleLowerCase().includes(query.toLocaleLowerCase());
-  const matchesBook = (book: Book) =>
-    match(book.title) ||
-    match(book.chapter_title || "") ||
-    (book.chapter_number !== null &&
-      match(`capítulo ${book.chapter_number}`)) ||
-    match(
-      `${book.content_type === "volume" ? "volume" : "capítulo"} ${book.chapter_number ?? ""}`,
-    );
-  const groupedSeries = series.filter(
-    (item) =>
-      (!favoriteOnly || item.is_favorite) &&
-      (match(item.title) ||
-        books.some((b) => b.series_id === item.id && matchesBook(b)) ||
-        volumes.some(
-          (v) =>
-            v.series_id === item.id &&
-            (match(`volume ${v.volume_number ?? ""}`) || match(v.title || "")),
-        )),
-  );
-  const looseBooks = books.filter(
-    (book) => !book.series_id && matchesBook(book),
-  );
-  const recent = [...books]
-    .filter((book) => progress[book.id])
-    .sort((a, b) =>
-      (progress[b.id]?.updated_at || "").localeCompare(
-        progress[a.id]?.updated_at || "",
-      ),
-    )[0];
-  const recentSeries = recent
-    ? series.find((item) => item.id === recent.series_id)
-    : null;
-  const recentPercent = recent
-    ? progress[recent.id].completed && recent.media_type !== "pdf"
-      ? 100
-      : calculateReadingProgress({
-        mediaType: recent.media_type,
-        pageNumber: progress[recent.id].page_number,
-        totalPages: recent.total_pages,
-        scrollRatio: progress[recent.id].scroll_ratio,
-      }).percent
-    : 0;
-  const relevantVolumes = volumes.filter((v) => v.series_id === selectedSeries);
-  const selectedSeriesData = series.find((item) => item.id === selectedSeries);
+  const groupedSeries = series;
+  const looseBooks = books;
+  const selectedSeriesData = selectedWork;
   const selectedFormat = selectedSeriesData?.format || null;
-  const formatLabel = selectedFormat === "novel" ? "Light Novel" : selectedFormat === "manga" ? "Mangá" : selectedFormat === "manhwa" ? "Manhwa" : "";
-  const acceptedMedia = selectedFormat === "novel" ? ".pdf,application/pdf" : selectedFormat ? ".cbz,application/zip,application/vnd.comicbook+zip" : undefined;
+  const formatLabel =
+    selectedFormat === "novel"
+      ? "Light Novel"
+      : selectedFormat === "manga"
+        ? "Mangá"
+        : selectedFormat === "manhwa"
+          ? "Manhwa"
+          : "";
+  const acceptedMedia =
+    selectedFormat === "novel"
+      ? ".pdf,application/pdf"
+      : selectedFormat
+        ? ".cbz,application/zip,application/vnd.comicbook+zip"
+        : undefined;
 
   return (
     <>
       <Nav />
-      <main className="dashboard">
-        <CatalogAccess ownerId={user.id} />
-        {recent && (
-          <section className="continue-card">
-            <div
-              className="continue-icon"
-              style={
-                recentSeries && coverUrls[recentSeries.id]
-                  ? { backgroundImage: `url("${coverUrls[recentSeries.id]}")` }
-                  : undefined
-              }
-            >
-              {!(recentSeries && coverUrls[recentSeries.id]) && (
-                <BookOpen size={24} />
-              )}
-            </div>
-            <div className="continue-copy">
-              <span className="eyebrow">Continuar lendo</span>
-              <strong>{recentSeries?.title || recent.title}</strong>
-              <small>
-                {recent.chapter_number !== null
-                  ? `Capítulo ${recent.chapter_number}`
-                  : `Página ${progress[recent.id].page_number}`}
-                {recent.chapter_title ? ` · ${recent.chapter_title}` : ""}
-              </small>
-              <div
-                className="book-progress"
-                aria-label={`${recentPercent}% lido`}
-              >
-                <div style={{ width: `${recentPercent}%` }} />
-              </div>
-            </div>
-            <Link className="continue-link" href={`/read/${recent.id}`}>
-              Continuar <ChevronRight size={18} />
-            </Link>
-          </section>
-        )}
+      <main id="main-content" tabIndex={-1} className="dashboard">
+        <CatalogAccess ownerId={user.id} onChanged={load} />
         <section className="library-section">
           <div className="section-head">
             <div>
               <span className="eyebrow">Acervo privado</span>
               <h1>
-                Minha biblioteca <span className="count">{series.length}</span>
+                Minha biblioteca <span className="count">{totalCount}</span>
               </h1>
             </div>
             <div className="library-buttons">
@@ -501,6 +561,7 @@ export function AdminDashboard({ user }: { user: User }) {
           {error && (
             <div className="error dashboard-error" role="alert">
               {error}
+              <button onClick={() => void load()}>Atualizar acervo</button>
               <button aria-label="Fechar erro" onClick={() => setError("")}>
                 <X size={16} />
               </button>
@@ -513,27 +574,37 @@ export function AdminDashboard({ user }: { user: User }) {
                 aria-label="Buscar obras e capítulos"
                 placeholder="Buscar obras, volumes ou capítulos…"
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setPage(0);
+                }}
               />
             </div>
             <div className="library-filters">
               <button
                 className={!favoriteOnly ? "selected" : ""}
                 aria-pressed={!favoriteOnly}
-                onClick={() => setFavoriteOnly(false)}
+                onClick={() => {
+                  setFavoriteOnly(false);
+                  setPage(0);
+                }}
               >
                 Todos
               </button>
               <button
                 className={favoriteOnly ? "selected" : ""}
                 aria-pressed={favoriteOnly}
-                onClick={() => setFavoriteOnly(true)}
+                onClick={() => {
+                  setFavoriteOnly(true);
+                  setPage(0);
+                }}
               >
                 <Star size={13} /> Favoritos
               </button>
             </div>
             <span className="muted">
-              {books.length} {books.length === 1 ? "arquivo" : "arquivos"}
+              {fileCount}{" "}
+              {fileCount === 1 ? "arquivo no acervo" : "arquivos no acervo"}
             </span>
           </div>
           {loading ? (
@@ -543,37 +614,18 @@ export function AdminDashboard({ user }: { user: User }) {
               {groupedSeries.length > 0 && (
                 <div className="series-grid">
                   {groupedSeries.map((item, index) => {
-                    const inSeries = books.filter(
-                      (b) => b.series_id === item.id,
-                    );
-                    const volumeCount = volumes.filter(
-                      (v) => v.series_id === item.id,
-                    ).length;
-                    const lastBook = inSeries
-                      .filter((b) => progress[b.id])
-                      .sort((a, b) =>
-                        (progress[b.id]?.updated_at || "").localeCompare(
-                          progress[a.id]?.updated_at || "",
-                        ),
-                      )[0];
+                    const volumeCount = item.volume_count;
                     return (
                       <article className="series-card" key={item.id}>
                         <Link
                           href={`/admin/series/${item.id}`}
                           className={`series-cover cover-${index % 5}`}
-                          style={
-                            coverUrls[item.id]
-                              ? {
-                                  backgroundImage: `linear-gradient(0deg,#171518e8,transparent 70%),url("${coverUrls[item.id]}")`,
-                                  backgroundSize: "cover",
-                                  backgroundPosition: "center",
-                                }
-                              : undefined
-                          }
+                          aria-label={`Administrar ${item.title}`}
                         >
-                          <span className="cover-glyph">✦</span>
-                          <strong>{item.title}</strong>
-                          <small>NUK · BIBLIOTECA PARTICULAR</small>
+                          <SeriesCover
+                            title={item.title}
+                            src={coverUrls[item.id]}
+                          />
                         </Link>
                         <div className="series-copy">
                           <div>
@@ -592,7 +644,9 @@ export function AdminDashboard({ user }: { user: User }) {
                               }
                               aria-pressed={Boolean(item.is_favorite)}
                               disabled={favoriteBusy === item.id}
-                              onClick={() => void toggleFavorite(item)}
+                              onClick={() =>
+                                void runAction(() => toggleFavorite(item))
+                              }
                             >
                               <Star
                                 size={16}
@@ -604,18 +658,17 @@ export function AdminDashboard({ user }: { user: User }) {
                             <p>
                               {volumeCount}{" "}
                               {volumeCount === 1 ? "volume" : "volumes"} ·{" "}
-                              {inSeries.length}{" "}
-                              {inSeries.length === 1 ? "capítulo" : "capítulos"}
+                              {item.chapter_count}{" "}
+                              {item.chapter_count === 1
+                                ? "capítulo"
+                                : "capítulos"}
                             </p>
                           </div>
-                          {lastBook && (
-                            <small className="series-last">
-                              Última leitura ·{" "}
-                              {lastBook.chapter_number !== null
-                                ? `Cap. ${lastBook.chapter_number}`
-                                : `p. ${progress[lastBook.id].page_number}`}
-                            </small>
-                          )}
+                          <small className="visibility-badge">
+                            {item.beta_visible
+                              ? "Liberada aos convidados"
+                              : "Restrita à administração"}
+                          </small>
                           <div className="series-actions">
                             <Link href={`/admin/series/${item.id}`}>
                               Abrir obra <ChevronRight size={15} />
@@ -645,33 +698,24 @@ export function AdminDashboard({ user }: { user: User }) {
                 <section className="loose-section">
                   <div className="section-head">
                     <div>
-                      <span className="eyebrow">
-                        Arquivos sem obra
-                      </span>
+                      <span className="eyebrow">Arquivos sem obra</span>
                       <h2>
-                        Sem coleção{" "}
-                        <span className="count">{looseBooks.length}</span>
+                        Sem coleção <span className="count">{looseCount}</span>
                       </h2>
                     </div>
                   </div>
                   <div className="loose-list">
                     {looseBooks.map((book) => {
-                      const current = progress[book.id];
                       return (
                         <article className="loose-row" key={book.id}>
-                          <Link
-                            href={`/read/${book.id}`}
-                            className="loose-icon"
-                          >
+                          <Link href={mediaHref(book)} className="loose-icon">
                             <FileText size={20} />
                           </Link>
                           <div className="loose-details">
-                            <Link href={`/read/${book.id}`}>{book.title}</Link>
+                            <Link href={mediaHref(book)}>{book.title}</Link>
                             <small>
                               {formatSize(book.size_bytes)} ·{" "}
-                              {current
-                                ? `Página ${current.page_number}`
-                                : "Ainda não iniciado"}
+                              {book.media_type.toUpperCase()}
                             </small>
                           </div>
                           <button
@@ -722,6 +766,21 @@ export function AdminDashboard({ user }: { user: User }) {
                 )}
             </>
           )}
+          <nav className="pagination" aria-label="Páginas da administração">
+            <button
+              disabled={!page || loading}
+              onClick={() => setPage(page - 1)}
+            >
+              Anterior
+            </button>
+            <span>Página {page + 1}</span>
+            <button
+              disabled={!hasMore || loading}
+              onClick={() => setPage(page + 1)}
+            >
+              Próxima
+            </button>
+          </nav>
         </section>
         <footer className="site-footer">
           nook. <span>Um capítulo de cada vez.</span>
@@ -749,6 +808,15 @@ export function AdminDashboard({ user }: { user: User }) {
               </button>
               <span className="eyebrow">Nova coleção</span>
               <h2 id="create-series-title">Criar obra</h2>
+              <p className="field-helper">
+                Novas obras ficam restritas à administração. A liberação exige
+                autorização de compartilhamento.
+              </p>
+              {error && (
+                <p className="error" role="alert">
+                  {error}
+                </p>
+              )}
               <label>
                 Nome da obra
                 <input
@@ -760,7 +828,10 @@ export function AdminDashboard({ user }: { user: User }) {
               </label>
               <label>
                 Tipo da obra
-                <select value={newFormat} onChange={(e) => setNewFormat(e.target.value as Format)}>
+                <select
+                  value={newFormat}
+                  onChange={(e) => setNewFormat(e.target.value as Format)}
+                >
                   <option value="novel">Light Novel</option>
                   <option value="manga">Mangá</option>
                   <option value="manhwa">Manhwa</option>
@@ -785,7 +856,7 @@ export function AdminDashboard({ user }: { user: User }) {
               <button
                 className="primary-button"
                 disabled={!newTitle.trim() || busy}
-                onClick={() => void createSeries()}
+                onClick={() => void runAction(createSeries)}
               >
                 {busy ? "Salvando…" : "Criar obra"}
               </button>
@@ -816,24 +887,23 @@ export function AdminDashboard({ user }: { user: User }) {
               </button>
               <span className="eyebrow">Acrescentar ao acervo</span>
               <h2 id="upload-title">Adicionar conteúdo</h2>
-              <label>
-                Obra
-                <select
-                  value={selectedSeries}
-                  onChange={(e) => {
-                    setSelectedSeries(e.target.value);
-                    setSelectedVolume("");
-                    setFile(null);
-                  }}
-                >
-                  <option value="">Sem coleção</option>
-                  {series.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.title}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              {error && (
+                <p className="error" role="alert">
+                  {error}
+                </p>
+              )}
+              <SeriesPicker
+                ownerId={user.id}
+                value={selectedWork}
+                disabled={uploading || busy}
+                onChange={(work) => {
+                  setSelectedWork(work);
+                  setSelectedSeries(work?.id || "");
+                  setSelectedVolume("");
+                  setSelectedVolumeItem(null);
+                  setFile(null);
+                }}
+              />
               <button
                 type="button"
                 className="inline-create"
@@ -849,7 +919,13 @@ export function AdminDashboard({ user }: { user: User }) {
                     value={inlineSeriesTitle}
                     onChange={(e) => setInlineSeriesTitle(e.target.value)}
                   />
-                  <select aria-label="Tipo da obra" value={inlineSeriesFormat} onChange={(e) => setInlineSeriesFormat(e.target.value as Format)}>
+                  <select
+                    aria-label="Tipo da obra"
+                    value={inlineSeriesFormat}
+                    onChange={(e) =>
+                      setInlineSeriesFormat(e.target.value as Format)
+                    }
+                  >
                     <option value="novel">Light Novel</option>
                     <option value="manga">Mangá</option>
                     <option value="manhwa">Manhwa</option>
@@ -857,29 +933,22 @@ export function AdminDashboard({ user }: { user: User }) {
                   <button
                     type="button"
                     className="secondary-button"
-                    onClick={() => void createSeriesFromUpload()}
+                    onClick={() => void runAction(createSeriesFromUpload)}
                   >
                     Criar
                   </button>
                 </div>
               )}
-              <label>
-                Volume
-                <select
-                  value={selectedVolume}
-                  onChange={(e) => setSelectedVolume(e.target.value)}
-                  disabled={!selectedSeries}
-                >
-                  <option value="">Sem volume</option>
-                  {relevantVolumes.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.volume_number !== null
-                        ? `Volume ${v.volume_number}`
-                        : v.title || "Volume"}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <VolumePicker
+                ownerId={user.id}
+                seriesId={selectedSeries}
+                value={selectedVolumeItem}
+                disabled={!selectedSeries || uploading || busy}
+                onChange={(volume) => {
+                  setSelectedVolumeItem(volume);
+                  setSelectedVolume(volume?.id || "");
+                }}
+              />
               {selectedSeries && (
                 <>
                   <button
@@ -907,7 +976,7 @@ export function AdminDashboard({ user }: { user: User }) {
                       <button
                         type="button"
                         className="secondary-button"
-                        onClick={() => void createVolumeFromUpload()}
+                        onClick={() => void runAction(createVolumeFromUpload)}
                       >
                         Criar
                       </button>
@@ -916,18 +985,20 @@ export function AdminDashboard({ user }: { user: User }) {
                 </>
               )}
               {selectedFormat && <p>Tipo: {formatLabel}</p>}
-              {selectedFormat === "novel" && <label>
-                Tipo do conteúdo
-                <select
-                  value={contentType}
-                  onChange={(e) =>
-                    setContentType(e.target.value as "chapter" | "volume")
-                  }
-                >
-                  <option value="chapter">Capítulo</option>
-                  <option value="volume">Volume completo</option>
-                </select>
-              </label>}
+              {selectedFormat === "novel" && (
+                <label>
+                  Tipo do conteúdo
+                  <select
+                    value={contentType}
+                    onChange={(e) =>
+                      setContentType(e.target.value as "chapter" | "volume")
+                    }
+                  >
+                    <option value="chapter">Capítulo</option>
+                    <option value="volume">Volume completo</option>
+                  </select>
+                </label>
+              )}
               <div className="form-row">
                 <label>
                   Número do capítulo/volume
@@ -973,7 +1044,12 @@ export function AdminDashboard({ user }: { user: User }) {
                 <UploadCloud size={19} />
                 {uploading
                   ? `Enviando… ${uploadPercent}%`
-                  : file?.name || (selectedFormat === "novel" ? "Arraste o PDF ou escolha acima" : selectedFormat ? "Arraste o CBZ ou escolha acima" : "Selecione uma obra primeiro")}
+                  : file?.name ||
+                    (selectedFormat === "novel"
+                      ? "Arraste o PDF ou escolha acima"
+                      : selectedFormat
+                        ? "Arraste o CBZ ou escolha acima"
+                        : "Selecione uma obra primeiro")}
                 {uploading && (
                   <div className="upload-track">
                     <div style={{ width: `${uploadPercent}%` }} />
@@ -983,9 +1059,13 @@ export function AdminDashboard({ user }: { user: User }) {
               <button
                 className="primary-button"
                 disabled={!file || !selectedSeries || uploading}
-                onClick={() => void uploadFile()}
+                onClick={() => void runAction(uploadFile)}
               >
-                {uploading ? "Enviando…" : selectedFormat === "novel" ? "Enviar PDF" : "Enviar capítulo"}
+                {uploading
+                  ? "Enviando…"
+                  : selectedFormat === "novel"
+                    ? "Enviar PDF"
+                    : "Enviar capítulo"}
               </button>
             </section>
           </div>
@@ -994,7 +1074,7 @@ export function AdminDashboard({ user }: { user: User }) {
           <BatchUploadModal
             ownerId={user.id}
             series={series}
-            volumes={volumes}
+
             onClose={() => setShowBatchUpload(false)}
             onComplete={load}
           />
@@ -1053,7 +1133,7 @@ export function AdminDashboard({ user }: { user: User }) {
                 <button
                   className="primary-button"
                   type="button"
-                  onClick={() => void saveSeriesEdit()}
+                  onClick={() => void runAction(saveSeriesEdit)}
                   disabled={!editTitle.trim() || busy}
                 >
                   {busy ? "Salvando…" : "Salvar alterações"}
@@ -1115,7 +1195,7 @@ export function AdminDashboard({ user }: { user: User }) {
                 <button
                   className="primary-button"
                   type="button"
-                  onClick={() => void saveBookEdit()}
+                  onClick={() => void runAction(saveBookEdit)}
                   disabled={!editChapterTitle.trim()}
                 >
                   Salvar alterações
@@ -1145,8 +1225,8 @@ export function AdminDashboard({ user }: { user: User }) {
             onCancel={() => setDeleteTarget(null)}
             onConfirm={() => {
               if (deleteTarget.type === "series")
-                void removeSeries(deleteTarget.item);
-              else void removeBook(deleteTarget.item);
+                void runAction(() => removeSeries(deleteTarget.item));
+              else void runAction(() => removeBook(deleteTarget.item));
             }}
           />
         )}

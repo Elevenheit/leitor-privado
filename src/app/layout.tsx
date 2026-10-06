@@ -2,10 +2,17 @@ import { DialogFocusManager } from "@/components/modals/dialog-focus-manager";
 import type { Metadata } from "next";
 import { Inter, Literata } from "next/font/google";
 import "./globals.css";
-import "./visual-refresh.css";
 
-const inter = Inter({ subsets: ["latin"], display: "swap", variable: "--font-ui-loaded" });
-const literata = Literata({ subsets: ["latin"], display: "swap", variable: "--font-literary-loaded" });
+const inter = Inter({
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-ui-loaded",
+});
+const literata = Literata({
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-literary-loaded",
+});
 
 export const metadata: Metadata = {
   title: "Nook — Biblioteca privada",
@@ -13,6 +20,18 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="pt-BR" className={`dark ${inter.variable} ${literata.variable}`}><body className="min-h-screen antialiased"><DialogFocusManager />{children}</body></html>;
+export default function RootLayout({
+  children,
+}: Readonly<{ children: React.ReactNode }>) {
+  return (
+    <html
+      lang="pt-BR"
+      className={`dark ${inter.variable} ${literata.variable}`}
+    >
+      <body className="min-h-screen antialiased">
+        <DialogFocusManager />
+        {children}
+      </body>
+    </html>
+  );
 }

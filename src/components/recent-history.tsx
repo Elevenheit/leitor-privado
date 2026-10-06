@@ -1,8 +1,8 @@
-/* eslint-disable @next/next/no-img-element -- Covers are private signed URLs. */
 "use client";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { ArrowUpRight, BookOpen } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
+import { SeriesCover } from "./series/series-cover";
 import { supabase } from "@/lib/supabase";
 import { formats, mediaHref, type Format } from "@/lib/catalog";
 import { calculateReadingProgress } from "@/lib/media-rules";
@@ -72,9 +72,11 @@ function chapter(entry: RecentEntry) {
 export function RecentHistory({
   userId,
   format,
+  featured = false,
 }: {
   userId: string;
   format?: Format;
+  featured?: boolean;
 }) {
   const [result, setResult] = useState<{
     key: string;
@@ -114,7 +116,10 @@ export function RecentHistory({
         ];
         const signed = await Promise.all(
           paths.map(async (path) => {
-            return [path, await getPrivateCoverUrl(userId, path).catch(() => "")] as const;
+            return [
+              path,
+              await getPrivateCoverUrl(userId, path).catch(() => ""),
+            ] as const;
           }),
         );
         if (live)
@@ -159,67 +164,79 @@ export function RecentHistory({
       </p>
     );
   if (!result.items.length) return null;
+  const current = featured
+    ? result.items.find(
+        (entry) => !entry.completed && position(entry).percent !== 100,
+      )
+    : undefined;
+  function renderEntry(entry: RecentEntry, prominent = false) {
+    const book = entry.books;
+    const progress = position(entry);
+    const cover =
+      book.series.cover_path && result?.covers[book.series.cover_path];
+    return (
+      <Link
+        className={`history-card${prominent ? " history-featured" : ""}`}
+        key={entry.book_id}
+        href={mediaHref(book)}
+      >
+        <div className="history-cover">
+          <SeriesCover
+            title={book.series.title}
+            src={cover || undefined}
+            compact
+          />
+        </div>
+        <div className="history-copy">
+          <span className="history-format">
+            {prominent ? "Sua leitura atual · " : ""}
+            {formats[book.series.format]}
+          </span>
+          <h3>{book.series.title}</h3>
+          <p className="history-chapter">{chapter(entry)}</p>
+          <div className="history-position">
+            <span>{progress.label}</span>
+            {progress.percent !== null && <span>{progress.percent}%</span>}
+          </div>
+          {progress.percent !== null && (
+            <div
+              className="history-progress"
+              role="progressbar"
+              aria-label={`Progresso de ${book.series.title}`}
+              aria-valuenow={progress.percent}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
+              <span style={{ width: `${progress.percent}%` }} />
+            </div>
+          )}
+          <span className="history-action">
+            {entry.completed ? "Ler novamente" : "Continuar lendo"}
+            <ArrowUpRight size={14} aria-hidden="true" />
+          </span>
+        </div>
+      </Link>
+    );
+  }
   return (
     <section className="recent-section" aria-labelledby="recent-history-title">
       <div className="recent-heading">
-        <h2 id="recent-history-title">Seu histórico recente</h2>
+        <h2 id="recent-history-title">
+          {current ? "Volte à sua história" : "Seu histórico recente"}
+        </h2>
       </div>
-      <div
-        className="recent-grid"
-        tabIndex={0}
-        aria-label="Itens do histórico recente"
-      >
-        {result.items.map((entry) => {
-          const { books: book } = entry;
-          const progress = position(entry);
-          const cover =
-            book.series.cover_path && result.covers[book.series.cover_path];
-          return (
-            <Link
-              className="history-card"
-              key={entry.book_id}
-              href={mediaHref(book)}
-            >
-              <div className="history-cover">
-                {cover ? (
-                  <img src={cover} alt="" loading="lazy" />
-                ) : (
-                  <BookOpen size={23} strokeWidth={1.3} aria-hidden="true" />
-                )}
-              </div>
-              <div className="history-copy">
-                <span className="history-format">
-                  {formats[book.series.format]}
-                </span>
-                <h3>{book.series.title}</h3>
-                <p className="history-chapter">{chapter(entry)}</p>
-                <div className="history-position">
-                  <span>{progress.label}</span>
-                  {progress.percent !== null && (
-                    <span>{progress.percent}%</span>
-                  )}
-                </div>
-                {progress.percent !== null && (
-                  <div
-                    className="history-progress"
-                    role="progressbar"
-                    aria-label={`Progresso de ${book.series.title}`}
-                    aria-valuenow={progress.percent}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                  >
-                    <span style={{ width: `${progress.percent}%` }} />
-                  </div>
-                )}
-                <span className="history-action">
-                  Continuar lendo
-                  <ArrowUpRight size={14} aria-hidden="true" />
-                </span>
-              </div>
-            </Link>
-          );
-        })}
-      </div>
+      {current && renderEntry(current, true)}
+      {result.items.some((entry) => entry !== current) && (
+        <div
+          className={`recent-grid${current ? " recent-secondary" : ""}`}
+          tabIndex={0}
+          aria-label="Itens do histórico recente"
+        >
+          {result.items
+            .filter((entry) => entry !== current)
+            .map((entry) => renderEntry(entry))}
+        </div>
+      )}
     </section>
   );
 }

@@ -3,13 +3,15 @@
 import Link from "next/link";
 import { toDataError } from "@/lib/data/errors";
 import { useParams, useRouter } from "next/navigation";
+import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight } from "lucide-react";
 import {
-  ArrowLeft,
-  BookOpen,
-  ChevronLeft,
-  ChevronRight,
-} from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
 import type { User } from "@supabase/supabase-js";
 import { AuthGate } from "@/components/auth-gate";
@@ -26,9 +28,21 @@ import {
 } from "@/lib/reader-illustrations";
 import { BUCKET, supabase } from "@/lib/supabase";
 import { getReaderNavigationNeighbors } from "@/lib/data/reader-navigation";
-import { saveReadingProgress } from "@/lib/data/progress";
+import {
+  saveReadingProgress,
+  ProgressConflictError,
+} from "@/lib/data/progress";
+import { patchProfileSettings } from "@/lib/data/preferences";
+import {
+  normalizeReaderPreferences,
+  type ReaderPreferences,
+} from "@/lib/reader-preferences";
 import { calculateReadingProgress } from "@/lib/media-rules";
-import { createPrivateMediaUrl, isPrivateMediaAuthorizationError, PRIVATE_MEDIA_URL_REFRESH_MARGIN_MS } from "@/lib/private-media-url";
+import {
+  createPrivateMediaUrl,
+  isPrivateMediaAuthorizationError,
+  PRIVATE_MEDIA_URL_REFRESH_MARGIN_MS,
+} from "@/lib/private-media-url";
 import { extractReadingBlocks, type ReadingBlock } from "@/lib/reader-text";
 import type {
   Book,
@@ -80,7 +94,9 @@ export default function ReadPage() {
   const params = useParams<{ id: string }>();
   return (
     <AuthGate>
-      {(user) => <Reader key={params.id} user={user} id={params.id} />}
+      {(user) => (
+        <Reader key={`${user.id}:${params.id}`} user={user} id={params.id} />
+      )}
     </AuthGate>
   );
 }
@@ -119,11 +135,26 @@ function Reader({ user, id }: { user: User; id: string }) {
   const [urlGeneration, setUrlGeneration] = useState(0);
   const [error, setError] = useState("");
   const [saveState, setSaveState] = useState("Salvo");
+  const [saveError, setSaveError] = useState("");
+  const [saveConflict, setSaveConflict] = useState(false);
+  const [preferenceError, setPreferenceError] = useState("");
+  const pendingPreferences = useRef<Partial<ReaderPreferences>>({});
+  const preferenceVersion = useRef(0);
+  const [destination, setDestination] = useState<string | null>(null);
+  const navigating = useRef(false);
   const [previousId, setPreviousId] = useState<string | null>(null);
   const [nextId, setNextId] = useState<string | null>(null);
-  const [libraryVolumes, setLibraryVolumes] = useState<Volume[]>([]);
+
   const [indexOpen, setIndexOpen] = useState(false);
-  const { books: libraryBooks, progress: libraryProgress, hasMore: libraryHasMore, loading: libraryLoading, error: indexError, loadPage: loadLibraryPage } = useReaderIndex(book, user.id, indexOpen);
+  const {
+    books: libraryBooks,
+    volumes: libraryVolumes,
+    progress: libraryProgress,
+    hasMore: libraryHasMore,
+    loading: libraryLoading,
+    error: indexError,
+    loadPage: loadLibraryPage,
+  } = useReaderIndex(book, user.id, indexOpen);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const [restoreTick, setRestoreTick] = useState(0);
   const [focusMode, setFocusMode] = useState(false);
@@ -159,7 +190,9 @@ function Reader({ user, id }: { user: User; id: string }) {
     const root = scrollRef.current;
     if (!root) return;
     const measurements: Record<number, number> = {};
-    for (const element of root.querySelectorAll<HTMLElement>("[data-page-segment]")) {
+    for (const element of root.querySelectorAll<HTMLElement>(
+      "[data-page-segment]",
+    )) {
       const page = Number(element.dataset.pageSegment);
       if (textByPage[page] !== undefined && element.offsetHeight > 0)
         measurements[page] = element.offsetHeight;
@@ -178,7 +211,7 @@ function Reader({ user, id }: { user: User; id: string }) {
   }, [mode, textByPage, illustrationsByPage, illustrationStatus]);
 
   const save = useCallback(async () => {
-    if (!readyRef.current || restoringRef.current) return;
+    if (!readyRef.current || restoringRef.current) return false;
     const container = scrollRef.current;
     if (!container) return;
     const version = ++saveVersion.current;
@@ -210,6 +243,7 @@ function Reader({ user, id }: { user: User; id: string }) {
         line_index: lineIndex,
         scroll_ratio: ratio,
         reading_mode: modeRef.current,
+        page_count: pages,
         completed: calculateReadingProgress({
           mediaType: "pdf",
           pageNumber: pageRef.current,
@@ -218,8 +252,22 @@ function Reader({ user, id }: { user: User; id: string }) {
         }).completed,
       });
       if (version === saveVersion.current) setSaveState("Salvo");
-    } catch {
-      if (version === saveVersion.current) setSaveState("Falha ao salvar");
+      if (version === saveVersion.current) {
+        setSaveError("");
+        setSaveConflict(false);
+      }
+      return true;
+    } catch (cause) {
+      if (version === saveVersion.current) {
+        setSaveState("Falha ao salvar");
+        setSaveConflict(cause instanceof ProgressConflictError);
+        setSaveError(
+          cause instanceof Error
+            ? cause.message
+            : "Não foi possível salvar o progresso. Tente novamente.",
+        );
+      }
+      return false;
     }
   }, [id, user.id, pages]);
   const saveRef = useRef(save);
@@ -232,22 +280,37 @@ function Reader({ user, id }: { user: User; id: string }) {
     let task: PDFDocumentLoadingTask | null = null;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     async function init() {
-      console.info("[Reader] carregando mídia", { id });
       try {
         const api = supabase();
         const [bookResult, progressResult] = await Promise.all([
-          api.from("books").select("id,owner_id,title,original_filename,file_path,size_bytes,total_pages,created_at,series_id,volume_id,chapter_number,chapter_title,sort_order,content_type,media_type").eq("id", id).single(),
-          api.from("reading_progress").select("owner_id,book_id,page_number,line_index,scroll_ratio,reading_mode,updated_at,completed").eq("owner_id", user.id).eq("book_id", id).maybeSingle(),
+          api
+            .from("books")
+            .select(
+              "id,owner_id,title,original_filename,file_path,size_bytes,total_pages,created_at,series_id,volume_id,chapter_number,chapter_title,sort_order,content_type,media_type",
+            )
+            .eq("id", id)
+            .single(),
+          api
+            .from("reading_progress")
+            .select(
+              "owner_id,book_id,page_number,line_index,scroll_ratio,reading_mode,updated_at,completed",
+            )
+            .eq("owner_id", user.id)
+            .eq("book_id", id)
+            .maybeSingle(),
         ]);
         if (bookResult.error || !bookResult.data)
           throw new Error("Capítulo não encontrado ou sem acesso.");
+        if (progressResult.error)
+          throw new Error(
+            "Não foi possível carregar seu progresso. Tente novamente antes de ler.",
+          );
+        if (cancelled) return;
         const current = bookResult.data as Book;
         if (current.media_type === "cbz") {
           router.replace(`/media/${id}`);
           return;
         }
-        console.info("[Reader] tipo detectado", current.media_type);
-        console.info("[Reader] storage path", current.file_path);
         void getReaderNavigationNeighbors(current)
           .then(({ previousId, nextId }) => {
             if (!cancelled) {
@@ -255,47 +318,46 @@ function Reader({ user, id }: { user: User; id: string }) {
               setNextId(nextId);
             }
           })
-          .catch((error) => console.error("[Navigation] erro", error));
-        const [workResult, volumeResult, privateUrl, indexVolumes] = await Promise.all([
+          .catch(() => {
+            if (!cancelled)
+              setSaveError(
+                "Não foi possível carregar os capítulos vizinhos. Use o índice ou tente recarregar.",
+              );
+          });
+        const [workResult, volumeResult, privateUrl] = await Promise.all([
           current.series_id
             ? api
                 .from("series")
-                .select("id,owner_id,title,description,cover_path,format,created_at,updated_at,tags,rights_note,beta_visible")
+                .select(
+                  "id,owner_id,title,description,cover_path,format,created_at,updated_at,tags,rights_note,beta_visible",
+                )
                 .eq("id", current.series_id)
                 .maybeSingle()
             : Promise.resolve({ data: null, error: null }),
           current.volume_id
             ? api
                 .from("volumes")
-                .select("id,owner_id,series_id,volume_number,title,description,sort_order,created_at,updated_at")
+                .select(
+                  "id,owner_id,series_id,volume_number,title,description,sort_order,created_at,updated_at",
+                )
                 .eq("id", current.volume_id)
                 .maybeSingle()
             : Promise.resolve({ data: null, error: null }),
           createPrivateMediaUrl(BUCKET, current.file_path),
-          current.series_id
-            ? api.from("volumes").select("id,owner_id,series_id,volume_number,title,description,sort_order,created_at,updated_at").eq("series_id", current.series_id).order("sort_order").order("volume_number")
-            : Promise.resolve({ data: [] as Volume[], error: null }),
         ]);
-        console.info("[Reader] URL obtida", { expiresAt: privateUrl.expiresAt });
         const pdfjs = await import("pdfjs-dist");
         pdfjs.GlobalWorkerOptions.workerSrc = new URL(
           "pdfjs-dist/build/pdf.worker.min.mjs",
           import.meta.url,
         ).toString();
-        const openDocument = (url: string) => pdfjs.getDocument({
-          url,
-          disableAutoFetch: true,
-          disableStream: true,
-          rangeChunkSize: 262144,
-        });
+        const openDocument = (url: string) =>
+          pdfjs.getDocument({
+            url,
+            disableAutoFetch: true,
+            disableStream: true,
+            rangeChunkSize: 262144,
+          });
         let activePrivateUrl = privateUrl;
-        void fetch(activePrivateUrl.url, { method: "HEAD" })
-          .then((response) =>
-            console.info("[Reader] fetch status", response.status),
-          )
-          .catch((error) =>
-            console.warn("[Reader] fetch status indisponível", error),
-          );
         task = openDocument(activePrivateUrl.url);
         let loaded: PDFDocumentProxy;
         try {
@@ -303,12 +365,20 @@ function Reader({ user, id }: { user: User; id: string }) {
         } catch (cause) {
           if (!isPrivateMediaAuthorizationError(cause)) throw cause;
           await task.destroy();
-          activePrivateUrl = await createPrivateMediaUrl(BUCKET, current.file_path);
+          activePrivateUrl = await createPrivateMediaUrl(
+            BUCKET,
+            current.file_path,
+          );
           task = openDocument(activePrivateUrl.url);
           loaded = await task.promise;
         }
         if (cancelled) return;
-        const refreshIn = Math.max(0, activePrivateUrl.expiresAt - Date.now() - PRIVATE_MEDIA_URL_REFRESH_MARGIN_MS);
+        const refreshIn = Math.max(
+          0,
+          activePrivateUrl.expiresAt -
+            Date.now() -
+            PRIVATE_MEDIA_URL_REFRESH_MARGIN_MS,
+        );
         refreshTimer = setTimeout(() => {
           void saveRef.current().finally(() => {
             if (!cancelled) {
@@ -345,35 +415,21 @@ function Reader({ user, id }: { user: User; id: string }) {
             Math.min(loaded.numPages, start + 1),
           ]),
         );
-        setLibraryVolumes((indexVolumes.data || []) as Volume[]);
-        // Catalog metadata is written only by administrators.
+
+        const applyPreferences = (value: unknown) => {
+          const p = normalizeReaderPreferences(value);
+          setFontSize(p.fontSize);
+          setLineHeight(p.lineHeight);
+          setTextWidth(p.textWidth);
+          setTheme(p.theme);
+          setFontFamily(p.fontFamily);
+          setShowIllustrations(p.showIllustrations);
+        };
         try {
-          const prefs = localStorage.getItem("nook-reader-prefs");
-          if (prefs) {
-            const value = JSON.parse(prefs) as {
-              fontSize?: number;
-              lineHeight?: number;
-              textWidth?: number;
-              theme?: Theme;
-              showIllustrations?: boolean;
-            };
-            if (value.fontSize) setFontSize(value.fontSize);
-            if (value.lineHeight) setLineHeight(value.lineHeight);
-            if (value.textWidth)
-              setTextWidth(
-                value.textWidth <= 730
-                  ? 700
-                  : value.textWidth <= 790
-                    ? 760
-                    : 820,
-              );
-            if (value.theme) setTheme(value.theme);
-            if (typeof value.showIllustrations === "boolean")
-              setShowIllustrations(value.showIllustrations);
-          } else if (window.matchMedia("(max-width: 620px)").matches)
-            setFontSize(19);
+          const cached = localStorage.getItem(`nook-reader-prefs:${user.id}`);
+          if (cached) applyPreferences(JSON.parse(cached));
         } catch {
-          /* Preferences are optional. */
+          /* The remote profile remains authoritative. */
         }
         const profile = await api
           .from("profiles")
@@ -381,26 +437,21 @@ function Reader({ user, id }: { user: User; id: string }) {
           .eq("id", user.id)
           .maybeSingle();
         if (cancelled) return;
-        const preferences = profile.data?.preferences;
-        if (preferences) {
-          if (Number.isFinite(preferences.lineHeight))
-            setLineHeight(Math.min(2.5, Math.max(1.3, preferences.lineHeight)));
-          if (Number.isFinite(preferences.textWidth))
-            setTextWidth(Math.min(900, Math.max(500, preferences.textWidth)));
-          if (typeof preferences.showIllustrations === "boolean")
-            setShowIllustrations(preferences.showIllustrations);
-          if (["dark", "sepia", "light"].includes(preferences.theme))
-            setTheme(preferences.theme);
-          if (Number.isFinite(preferences.fontSize))
-            setFontSize(Math.min(32, Math.max(16, preferences.fontSize)));
-          setFontFamily(preferences.fontFamily === "sans" ? "sans" : "serif");
-        }
+        if (profile.error)
+          setPreferenceError(
+            "Não foi possível carregar as preferências da conta. Os ajustes locais continuam disponíveis.",
+          );
+        else if (profile.data) applyPreferences(profile.data.preferences);
         readyRef.current = true;
         setLoading(false);
       } catch (cause) {
         if (!cancelled) {
           setError(
-            toDataError(cause, "Nao foi possivel abrir o PDF. Confira o arquivo e seu acesso.", "pdf").message,
+            toDataError(
+              cause,
+              "Nao foi possivel abrir o PDF. Confira o arquivo e seu acesso.",
+              "pdf",
+            ).message,
           );
           setLoading(false);
         }
@@ -418,36 +469,36 @@ function Reader({ user, id }: { user: User; id: string }) {
   useEffect(() => {
     const root = scrollRef.current;
     if (!root || !pages) return;
+    const intersecting = new Set<number>();
     const observer = new IntersectionObserver(
       (entries) => {
-        const visible = entries
-          .filter((entry) => entry.isIntersecting)
-          .map((entry) =>
-            Number((entry.target as HTMLElement).dataset.pageSegment),
+        for (const entry of entries) {
+          const page = Number(
+            (entry.target as HTMLElement).dataset.pageSegment,
           );
+          if (entry.isIntersecting) intersecting.add(page);
+          else intersecting.delete(page);
+        }
+        const visible = [...intersecting];
         if (!visible.length) return;
-        const selected = visible.reduce((best, value) => {
-          const bestEl = root.querySelector<HTMLElement>(
-            `[data-page-segment="${best}"]`,
+        const viewport = root.getBoundingClientRect();
+        const inside = visible.filter((value) => {
+          const rect = root
+            .querySelector<HTMLElement>(`[data-page-segment="${value}"]`)
+            ?.getBoundingClientRect();
+          return (
+            rect &&
+            rect.bottom > viewport.top + 32 &&
+            rect.top < viewport.bottom
           );
-          const el = root.querySelector<HTMLElement>(
-            `[data-page-segment="${value}"]`,
-          );
-          return Math.abs(
-            (el?.getBoundingClientRect().top || 0) -
-              root.getBoundingClientRect().top,
-          ) <
-            Math.abs(
-              (bestEl?.getBoundingClientRect().top || 0) -
-                root.getBoundingClientRect().top,
-            )
-            ? value
-            : best;
-        }, visible[0]);
+        });
+        const selected =
+          restoringRef.current?.page ??
+          (inside.length ? Math.min(...inside) : pageRef.current);
         pageRef.current = selected;
         setCurrentPage(selected);
         const near = new Set<number>();
-        for (const n of visible)
+        for (const n of [...visible, selected])
           for (let offset = -2; offset <= 2; offset++)
             if (n + offset >= 1 && n + offset <= pages) near.add(n + offset);
         setActivePages(near);
@@ -462,23 +513,37 @@ function Reader({ user, id }: { user: User; id: string }) {
 
   useEffect(() => {
     const retained = new Set(activePages);
-    for (let page = Math.max(1, currentPage - 10); page <= Math.min(pages, currentPage + 10); page++)
+    for (
+      let page = Math.max(1, currentPage - 10);
+      page <= Math.min(pages, currentPage + 10);
+      page++
+    )
       retained.add(page);
     retainedPagesRef.current = retained;
     const prune = <T,>(previous: Record<number, T>) => {
-      const entries = Object.entries(previous).filter(([page]) => retained.has(Number(page)));
+      const entries = Object.entries(previous).filter(([page]) =>
+        retained.has(Number(page)),
+      );
       return entries.length === Object.keys(previous).length
         ? previous
-        : Object.fromEntries(entries) as Record<number, T>;
+        : (Object.fromEntries(entries) as Record<number, T>);
     };
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setTextByPage(prune);
     setIllustrationsByPage(prune);
     setIllustrationStatus(prune);
-    setLoadingPages((previous) => new Set([...previous].filter((page) => retained.has(page))));
+    setLoadingPages(
+      (previous) => new Set([...previous].filter((page) => retained.has(page))),
+    );
     for (const page of Object.keys(illustrationStatus).map(Number))
       if (!retained.has(page)) illustrationExtractor?.release(page);
-  }, [activePages, currentPage, illustrationExtractor, illustrationStatus, pages]);
+  }, [
+    activePages,
+    currentPage,
+    illustrationExtractor,
+    illustrationStatus,
+    pages,
+  ]);
 
   const loadPageText = useCallback(
     async (pageNo: number) => {
@@ -498,7 +563,11 @@ function Reader({ user, id }: { user: User; id: string }) {
           setTextByPage((previous) => ({ ...previous, [pageNo]: blocks }));
       } catch (cause) {
         setError(
-          toDataError(cause, "Nao foi possivel extrair o texto desta pagina.", "pdf").message,
+          toDataError(
+            cause,
+            "Nao foi possivel extrair o texto desta pagina.",
+            "pdf",
+          ).message,
         );
       } finally {
         loadingRef.current.delete(pageNo);
@@ -672,7 +741,7 @@ function Reader({ user, id }: { user: User; id: string }) {
       showIllustrations: boolean;
     }>,
   ) {
-    const next = {
+    const next = normalizeReaderPreferences({
       fontFamily,
       fontSize,
       lineHeight,
@@ -680,33 +749,58 @@ function Reader({ user, id }: { user: User; id: string }) {
       theme,
       showIllustrations,
       ...change,
-    };
-    if (change.fontSize) setFontSize(change.fontSize);
-    if (change.lineHeight) setLineHeight(change.lineHeight);
-    if (change.textWidth) setTextWidth(change.textWidth);
-    if (change.theme) setTheme(change.theme);
+    });
+    if (change.fontSize !== undefined) setFontSize(next.fontSize);
+    if (change.lineHeight !== undefined) setLineHeight(next.lineHeight);
+    if (change.textWidth !== undefined) setTextWidth(next.textWidth);
+    if (change.theme !== undefined) setTheme(next.theme);
     if (change.showIllustrations !== undefined)
-      setShowIllustrations(change.showIllustrations);
+      setShowIllustrations(next.showIllustrations);
+    pendingPreferences.current = { ...pendingPreferences.current, ...change };
+    const patch = { ...pendingPreferences.current };
+    const version = ++preferenceVersion.current;
     try {
-      localStorage.setItem("nook-reader-prefs", JSON.stringify(next));
+      localStorage.setItem(
+        `nook-reader-prefs:${user.id}`,
+        JSON.stringify(next),
+      );
     } catch {
       /* Storage is optional. */
     }
-    void supabase()
-      .from("profiles")
-      .update({ preferences: next })
-      .eq("id", user.id)
-      .then(({ error }) => {
-        if (error) setSaveState("Preferências salvas apenas neste navegador");
+    void patchProfileSettings(user.id, patch)
+      .then(() => {
+        if (version !== preferenceVersion.current) return;
+        for (const key of Object.keys(patch) as (keyof ReaderPreferences)[])
+          if (pendingPreferences.current[key] === patch[key])
+            delete pendingPreferences.current[key];
+        if (!Object.keys(pendingPreferences.current).length)
+          setPreferenceError("");
+      })
+      .catch(() => {
+        if (version === preferenceVersion.current)
+          setPreferenceError(
+            "Preferências guardadas neste navegador. Tente sincronizar novamente.",
+          );
       });
   }
   function setView(next: Mode) {
+    const page = pageRef.current;
     modeRef.current = next;
+    restoringRef.current = { page, line: 0, ratio: 0 };
     setMode(next);
+    setRestoreTick((value) => value + 1);
     setSettingsOpen(false);
-    void save();
   }
-
+  async function navigate(href: string) {
+    if (navigating.current) return;
+    navigating.current = true;
+    setDestination(href);
+    try {
+      if (await save()) router.push(href);
+    } finally {
+      navigating.current = false;
+    }
+  }
   function bookmarkPosition() {
     const root = scrollRef.current;
     const segment = root?.querySelector<HTMLElement>(
@@ -771,6 +865,12 @@ function Reader({ user, id }: { user: User; id: string }) {
           <BookOpen size={34} />
           <h1>Não foi possível abrir</h1>
           <p>{error}</p>
+          <button
+            className="secondary-button"
+            onClick={() => location.reload()}
+          >
+            Tentar novamente
+          </button>
           <Link href="/" className="primary-button">
             Voltar à biblioteca
           </Link>
@@ -795,7 +895,7 @@ function Reader({ user, id }: { user: User; id: string }) {
           className="reader-back"
           aria-label="Voltar à biblioteca"
           onClick={() => {
-            void save().finally(() => router.push(series ? `/series/${series.id}` : "/"));
+            void navigate(series ? `/series/${series.id}` : "/");
           }}
         >
           <ArrowLeft size={18} />
@@ -839,7 +939,40 @@ function Reader({ user, id }: { user: User; id: string }) {
         theme={theme}
         showIllustrations={showIllustrations}
         updatePrefs={updatePrefs}
+        onNavigate={(bookId) => void navigate(`/read/${bookId}`)}
       />
+      {saveError && (
+        <div className="reader-save-feedback" role="alert">
+          <p>{saveError}</p>
+          {saveConflict ? (
+            <button onClick={() => location.reload()}>
+              Carregar posição recente
+            </button>
+          ) : (
+            <button
+              onClick={() => {
+                if (destination) void navigate(destination);
+                else void save();
+              }}
+            >
+              Tentar salvar novamente
+            </button>
+          )}
+          {destination && (
+            <button onClick={() => router.push(destination)}>
+              Sair sem salvar esta posição
+            </button>
+          )}
+        </div>
+      )}
+      {preferenceError && (
+        <div className="reader-save-feedback" role="status">
+          <p>{preferenceError}</p>
+          <button onClick={() => updatePrefs(pendingPreferences.current)}>
+            Sincronizar preferências
+          </button>
+        </div>
+      )}
       <div className="reader-scroll" ref={scrollRef} onScroll={onScroll}>
         <div
           className={`continuous-document ${mode === "text" ? "text-document" : "pdf-document"}`}
@@ -860,15 +993,35 @@ function Reader({ user, id }: { user: User; id: string }) {
               className={`document-segment ${mode === "text" ? "text-segment" : "pdf-segment"}`}
               key={pageNo}
               data-page-segment={pageNo}
-              style={mode === "text" && textByPage[pageNo] === undefined && pageHeights[pageNo]
-                ? { minHeight: `${pageHeights[pageNo]}px` }
-                : undefined}
+              style={
+                mode === "text" &&
+                textByPage[pageNo] === undefined &&
+                pageHeights[pageNo]
+                  ? { minHeight: `${pageHeights[pageNo]}px` }
+                  : undefined
+              }
             >
               {mode === "text" ? (
                 textByPage[pageNo] !== undefined ? (
                   textByPage[pageNo].length ||
                   (showIllustrations && illustrationsByPage[pageNo]?.length) ? (
                     <article className="reflow-text">
+                      {textByPage[pageNo].reduce(
+                        (size, block) => size + block.text.length,
+                        0,
+                      ) < 40 && (
+                        <aside className="text-only-note">
+                          Pouco texto extraível nesta página.{" "}
+                          <button
+                            onClick={() => {
+                              pageRef.current = pageNo;
+                              setView("page");
+                            }}
+                          >
+                            Ver página original
+                          </button>
+                        </aside>
+                      )}
                       {orderPageContent(
                         textByPage[pageNo],
                         showIllustrations
@@ -901,7 +1054,12 @@ function Reader({ user, id }: { user: User; id: string }) {
                   ) : (
                     <div className="text-only-note">
                       Página {pageNo} sem texto extraível.{" "}
-                      <button onClick={() => setView("page")}>
+                      <button
+                        onClick={() => {
+                          pageRef.current = pageNo;
+                          setView("page");
+                        }}
+                      >
                         Ver no PDF
                       </button>
                     </div>
@@ -925,11 +1083,20 @@ function Reader({ user, id }: { user: User; id: string }) {
             <span>Fim do capítulo</span>
             <div>
               {previousId ? (
-                <Link href={`/read/${previousId}`} onClick={(event) => {
-                  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-                  event.preventDefault();
-                  void save().finally(() => router.push(`/read/${previousId}`));
-                }}>
+                <Link
+                  href={`/read/${previousId}`}
+                  onClick={(event) => {
+                    if (
+                      event.metaKey ||
+                      event.ctrlKey ||
+                      event.shiftKey ||
+                      event.altKey
+                    )
+                      return;
+                    event.preventDefault();
+                    void navigate(`/read/${previousId}`);
+                  }}
+                >
                   <ChevronLeft size={17} /> Capítulo anterior
                 </Link>
               ) : (
@@ -937,11 +1104,20 @@ function Reader({ user, id }: { user: User; id: string }) {
               )}
               <button onClick={() => setIndexOpen(true)}>Índice</button>
               {nextId ? (
-                <Link href={`/read/${nextId}`} onClick={(event) => {
-                  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-                  event.preventDefault();
-                  void save().finally(() => router.push(`/read/${nextId}`));
-                }}>
+                <Link
+                  href={`/read/${nextId}`}
+                  onClick={(event) => {
+                    if (
+                      event.metaKey ||
+                      event.ctrlKey ||
+                      event.shiftKey ||
+                      event.altKey
+                    )
+                      return;
+                    event.preventDefault();
+                    void navigate(`/read/${nextId}`);
+                  }}
+                >
                   Próximo capítulo <ChevronRight size={17} />
                 </Link>
               ) : (
@@ -959,7 +1135,7 @@ function Reader({ user, id }: { user: User; id: string }) {
           progress={libraryProgress}
           currentId={id}
           onClose={() => setIndexOpen(false)}
-          onNavigate={(bookId) => void save().finally(() => router.push(`/read/${bookId}`))}
+          onNavigate={(bookId) => void navigate(`/read/${bookId}`)}
           onLoadMore={() => void loadLibraryPage()}
           hasMore={libraryHasMore}
           loading={libraryLoading}

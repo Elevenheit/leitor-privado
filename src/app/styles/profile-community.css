@@ -1,3 +1,172 @@
+
+
+.profile-content { border:0; padding:0; margin:0; min-width:0; }
+.profile-page {
+  width: min(calc(100% - 48px), 980px);
+  padding: clamp(32px, 5vw, 58px) 0 78px;
+}
+.profile-heading {
+  margin: 0 0 28px;
+}
+.profile-heading h1 {
+  margin: 10px 0 8px;
+  font: 500 clamp(34px, 5vw, 48px)/1.08 var(--font-literary);
+  letter-spacing: -0.04em;
+}
+.profile-heading p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.profile-identity-card,
+.profile-settings-card {
+  overflow: hidden;
+  border: 1px solid #39332c;
+  border-radius: 18px;
+  background: linear-gradient(150deg, #211e1a, #1c1a17 75%);
+  box-shadow: 0 16px 45px #0002;
+}
+.profile-banner {
+  position: relative;
+  height: clamp(138px, 23vw, 210px);
+  max-width: none;
+  margin: 0;
+  overflow: visible;
+  border-radius: 0;
+  background:
+    radial-gradient(ellipse at 78% 12%, #76583a 0, transparent 30%),
+    linear-gradient(120deg, #56402c, #29231d 64%, #31271d);
+}
+.profile-banner:after {
+  position: absolute;
+  inset: 0;
+  border-bottom: 1px solid #ffffff12;
+  background: linear-gradient(90deg, #1715124a, transparent 76%);
+  content: "";
+  pointer-events: none;
+}
+.profile-banner > img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 0;
+}
+.profile-banner-label {
+  position: absolute;
+  z-index: 1;
+  top: 22px;
+  right: 25px;
+  color: #f2ddc0b8;
+  font: italic 13px var(--font-literary);
+}
+.profile-avatar {
+  position: absolute;
+  z-index: 2;
+  bottom: -38px;
+  left: clamp(20px, 4vw, 38px);
+  display: grid;
+  width: 88px;
+  height: 88px;
+  place-items: center;
+  overflow: hidden;
+  border: 5px solid #211e1a;
+  border-radius: 50%;
+  background: #3a2e22;
+  color: var(--accent-hover);
+  font-size: 33px;
+}
+.profile-avatar img,
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+.profile-card-body {
+  padding: 53px clamp(20px, 4vw, 38px) 30px;
+}
+.profile-card-title {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 15px;
+  margin-bottom: 24px;
+}
+.profile-card-title .eyebrow {
+  font-size: 9px;
+}
+.profile-card-title h2 {
+  margin: 7px 0 0;
+  font: 500 25px/1.2 var(--font-literary);
+}
+.profile-summary {
+  display: grid;
+  justify-items: end;
+  gap: 7px;
+  max-width: 48%;
+  text-align: right;
+}
+.profile-handle {
+  padding-bottom: 3px;
+  color: #b49b7c;
+  font-size: 12px;
+}
+.profile-summary p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.profile-form {
+  display: grid;
+  gap: 19px;
+  max-width: none;
+  margin: 0;
+}
+.profile-form label,
+.profile-field-block {
+  display: grid;
+  gap: 8px;
+  color: #d4c9bc;
+  font-size: 12px;
+  font-weight: 600;
+}
+.profile-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 15px;
+}
+.profile-form
+  :is(
+    input:not([type="checkbox"]):not([type="range"]):not([type="file"]),
+    textarea,
+    select
+  ) {
+  width: 100%;
+  min-height: 46px;
+  padding: 12px 14px;
+  border: 1px solid #443c33;
+  border-radius: 10px;
+  background: #191714;
+  color: var(--text);
+  font-size: 13px;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease;
+}
+.profile-form :is(input, textarea, select):focus {
+  border-color: #b18b5e;
+  background: #1e1a16;
+}
+.profile-form textarea {
+  min-height: 104px;
+  resize: vertical;
+  line-height: 1.6;
+}
 .profile-form textarea::placeholder {
   color: #746a60;
 }
@@ -266,6 +435,7 @@
   margin-top: 65px;
   padding-top: 40px;
   border-top: 1px solid var(--border);
+  border-top-color: #e9decf24;
 }
 .conversation h2,
 .profile-page h1 {
@@ -274,6 +444,9 @@
 .comment {
   padding: 24px 0;
   border-bottom: 1px solid var(--border);
+  border-color: #e9decf1d;
+  border-radius: 5px;
+  background: #1b1a17;
 }
 .comment header {
   display: flex;
@@ -308,36 +481,6 @@
   padding-left: 24px;
   border-left: 2px solid var(--border);
 }
-.media-controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 14px;
-  padding: 20px 0;
-}
-.media-controls label {
-  display: grid;
-  gap: 8px;
-  font-size: 12px;
-}
-.comic-pages {
-  height: 75vh;
-  overflow: auto;
-  background: #0c0b0d;
-  text-align: center;
-  overscroll-behavior: contain;
-}
-.comic-pages img {
-  display: block;
-  height: auto;
-  max-width: none;
-  margin: 0 auto;
-}
-.comic-pages.screen img {
-  width: 100% !important;
-  height: 75vh;
-  object-fit: contain;
-}
 .publisher {
   margin-top: 30px;
   padding: 24px;
@@ -370,21 +513,6 @@
   }
 }
 @media (max-width: 620px) {
-  .beta-dashboard .series-copy {
-    gap: 5px;
-    padding: 10px 34px 0 1px;
-  }
-  .beta-dashboard .series-title {
-    font-size: 14px;
-  }
-  .beta-dashboard .series-copy .eyebrow {
-    font-size: 8px;
-  }
-  .beta-dashboard .favorite-button {
-    top: 3px;
-    width: 36px;
-    height: 36px;
-  }
   .continue-card {
     min-height: 82px;
     gap: 12px;
@@ -403,16 +531,6 @@
   .continue-link svg {
     width: 19px;
     height: 19px;
-  }
-  .catalog-empty {
-    min-height: 150px;
-  }
-  .beta-dashboard .pagination {
-    gap: 12px;
-    font-size: 11px;
-  }
-  .beta-dashboard .pagination button {
-    padding-inline: 11px;
   }
   .profile-page {
     width: calc(100% - 32px);
@@ -508,12 +626,24 @@
   }
 }
 @media (max-width: 370px) {
-  .beta-dashboard .series-title {
-    font-size: 13px;
-  }
   .profile-page {
     width: calc(100% - 26px);
   }
 }
 
+.comment-actions button {
+  min-height: 40px;
+  border-radius: 4px;
+  color: #ddbf96;
+}
 
+
+
+/* Preserve keyboard focus after field-specific outline resets. */
+.profile-form :is(input,textarea,select):focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+.profile-form .field-helper,.profile-form .field-hint { color:var(--muted); font-size:12px; line-height:1.5; }
+.profile-form textarea::placeholder { color:var(--muted); }
+.profile-form label { min-width:0; }
+.profile-form :is(input,textarea,select) { font-size:16px; }
+.choice-row button { min-height:44px; }
+.profile-card-title h2 { overflow-wrap:anywhere; }

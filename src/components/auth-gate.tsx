@@ -6,6 +6,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import type { User } from "@supabase/supabase-js";
 import { BetaAccess } from "@/components/beta-access";
 import { isConfigured, supabase } from "@/lib/supabase";
+import { clearCatalogContexts } from "@/lib/catalog-context";
 
 export function AuthGate({
   children,
@@ -23,14 +24,24 @@ export function AuthGate({
   useEffect(() => {
     if (!isConfigured) return;
     const api = supabase();
-    api.auth.getUser().then(({ data, error }) => {
-      setUser(error ? null : data.user);
-      setLoading(false);
-    }).catch((cause) => {
-      setError(toDataError(cause, "Nao foi possivel conferir a sessao. Tente novamente.", "auth").message);
-      setLoading(false);
-    });
+    api.auth
+      .getUser()
+      .then(({ data, error }) => {
+        setUser(error ? null : data.user);
+        setLoading(false);
+      })
+      .catch((cause) => {
+        setError(
+          toDataError(
+            cause,
+            "Nao foi possivel conferir a sessao. Tente novamente.",
+            "auth",
+          ).message,
+        );
+        setLoading(false);
+      });
     const { data: listener } = api.auth.onAuthStateChange((_event, session) => {
+      if (_event === "SIGNED_OUT") clearCatalogContexts();
       setUser(session?.user ?? null);
       setLoading(false);
     });
@@ -55,8 +66,12 @@ export function AuthGate({
     );
 
   if (loading)
-    return <div className="center-screen muted">Abrindo sua biblioteca…</div>;
-  if (user) return <BetaAccess>{children(user)}</BetaAccess>;
+    return (
+      <main className="center-screen muted">
+        <p role="status">Abrindo sua biblioteca…</p>
+      </main>
+    );
+  if (user) return <BetaAccess key={user.id}>{children(user)}</BetaAccess>;
 
   async function signIn(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -105,7 +120,11 @@ export function AuthGate({
           para ler.
         </h1>
         <p>Entre para continuar exatamente de onde parou.</p>
-        <div className="access-tabs">
+        <div
+          className="access-tabs"
+          role="group"
+          aria-label="Acesso à biblioteca"
+        >
           <button
             aria-pressed={!signup}
             onClick={() => {
@@ -125,7 +144,7 @@ export function AuthGate({
             Criar conta
           </button>
         </div>
-        <form onSubmit={signIn} className="auth-form">
+        <form onSubmit={signIn} className="auth-form" aria-busy={submitting}>
           <label>
             E-mail
             <input
@@ -143,11 +162,21 @@ export function AuthGate({
               type="password"
               minLength={signup ? 10 : 1}
               autoComplete={signup ? "new-password" : "current-password"}
+              aria-describedby={signup ? "signup-password-hint" : undefined}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
               placeholder="Sua senha"
             />
+            {signup && (
+              <small
+                className="field-helper"
+                id="signup-password-hint"
+                aria-hidden="true"
+              >
+                Use ao menos 10 caracteres.
+              </small>
+            )}
           </label>
           {error && (
             <div className="error" role="alert">

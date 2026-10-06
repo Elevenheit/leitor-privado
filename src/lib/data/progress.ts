@@ -2,22 +2,64 @@ import { supabase } from "@/lib/supabase";
 import type { ReadingProgress } from "@/lib/types";
 import { throwOnError } from "./errors";
 
-export type ProgressUpdate = Partial<Pick<ReadingProgress, "page_number" | "line_index" | "scroll_ratio" | "reading_mode" | "completed" | "page_count">>;
+export type ProgressUpdate = Partial<
+  Pick<
+    ReadingProgress,
+    | "page_number"
+    | "line_index"
+    | "scroll_ratio"
+    | "reading_mode"
+    | "completed"
+    | "page_count"
+  >
+>;
 
 const saveQueues = new Map<string, Promise<void>>();
 
-export async function listReadingProgress(ownerId: string) {
-  const result = await supabase().from("reading_progress").select("book_id,owner_id,page_number,line_index,scroll_ratio,reading_mode,updated_at,completed").eq("owner_id", ownerId);
-  return throwOnError(result, "Não foi possível carregar seu progresso.") as ReadingProgress[];
+export class ProgressConflictError extends Error {
+  constructor() {
+    super(
+      "A posição salva mudou desde a abertura deste capítulo. Recarregue para continuar da posição mais recente.",
+    );
+    this.name = "ProgressConflictError";
+  }
 }
 
-export async function saveReadingProgress(ownerId: string, bookId: string, update: ProgressUpdate) {
+export async function listReadingProgress(ownerId: string) {
+  const result = await supabase()
+    .from("reading_progress")
+    .select(
+      "book_id,owner_id,page_number,line_index,scroll_ratio,reading_mode,updated_at,completed",
+    )
+    .eq("owner_id", ownerId);
+  return throwOnError(
+    result,
+    "Não foi possível carregar seu progresso.",
+  ) as ReadingProgress[];
+}
+
+export async function saveReadingProgress(
+  ownerId: string,
+  bookId: string,
+  update: ProgressUpdate,
+) {
   const key = `${ownerId}:${bookId}`;
+  const snapshot = { ...update };
   const previous = saveQueues.get(key) || Promise.resolve();
-  const current = previous.catch(() => undefined).then(async () => {
-    const result = await supabase().from("reading_progress").upsert({ owner_id: ownerId, book_id: bookId, ...update, updated_at: new Date().toISOString() });
-    throwOnError(result, "Falha ao salvar seu progresso.");
-  });
+  const current = previous
+    .catch(() => undefined)
+    .then(async () => {
+      const result = await supabase()
+        .from("reading_progress")
+        .upsert({
+          owner_id: ownerId,
+          book_id: bookId,
+          ...snapshot,
+          updated_at: new Date().toISOString(),
+        });
+      if (result.error?.code === "40001") throw new ProgressConflictError();
+      throwOnError(result, "Falha ao salvar seu progresso.");
+    });
   saveQueues.set(key, current);
   try {
     await current;

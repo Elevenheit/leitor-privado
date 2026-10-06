@@ -2,13 +2,13 @@
 // All Supabase responses below are simulated; no remote request is allowed.
 import { chromium, expect } from "@playwright/test";
 import assert from "node:assert/strict";
-import { mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { originalPdf } from "./ui/original-pdf.mjs";
 
 const origin = process.env.NOOK_UI_ORIGIN || "http://localhost:3100";
 assert.ok(["localhost", "127.0.0.1"].includes(new URL(origin).hostname));
-const output = join(tmpdir(), "nook-rail-review");
+const output = join(process.cwd(), "artifacts", "next-browser");
 mkdirSync(output, { recursive: true });
 const userA = "11111111-1111-4111-8111-111111111111";
 const userB = "22222222-2222-4222-8222-222222222222";
@@ -64,6 +64,23 @@ entries.push({
   owner_id: userB,
   updated_at: "2026-09-25T00:00:00Z",
 });
+const localBook = {
+  id: "book-0",
+  owner_id: userB,
+  title: "Original local chapter",
+  original_filename: "local.pdf",
+  file_path: `${userB}/local.pdf`,
+  size_bytes: 3000,
+  total_pages: 2,
+  series_id: "series-0",
+  volume_id: null,
+  chapter_number: 1,
+  chapter_title: null,
+  sort_order: 0,
+  content_type: "chapter",
+  media_type: "pdf",
+  created_at: "2026-01-01",
+};
 const palettes = [
   ["#655137", "#25211b"],
   ["#68624d", "#252b25"],
@@ -76,11 +93,22 @@ function cover(index) {
 }
 const browser = await chromium.launch();
 const failures = [];
+const unexpected = [];
 async function setup(id, admin = false) {
   const context = await browser.newContext();
   const page = await context.newPage();
   page.on("pageerror", (error) => failures.push(error.message));
-  const state = { empty: false, error: false, historyRequests: [] };
+  const state = {
+    empty: false,
+    error: false,
+    historyRequests: [],
+    catalogRequests: [],
+    progressWrites: [],
+    preferences: { lineHeight: 2.05, textWidth: 820, showIllustrations: false },
+    progress: null,
+    failSave: false,
+    bookmarks: [],
+  };
   const user = {
     id,
     aud: "authenticated",
@@ -102,6 +130,10 @@ async function setup(id, admin = false) {
     const request = route.request();
     const url = new URL(request.url());
     if (url.origin === new URL(origin).origin) return route.continue();
+    if (url.origin !== "http://127.0.0.1:54321") {
+      unexpected.push(url.origin);
+      return route.abort();
+    }
     const send = (data, status = 200) =>
       route.fulfill({
         status,
@@ -110,7 +142,73 @@ async function setup(id, admin = false) {
       });
     if (url.pathname.endsWith("/auth/v1/token")) return send(session);
     if (url.pathname.endsWith("/auth/v1/user")) return send(user);
-    if (url.pathname.includes("/rpc/")) throw Error("Unexpected RPC call");
+    if (url.pathname.endsWith("/rpc/browse_catalog")) {
+      const args = request.postDataJSON();
+      state.catalogRequests.push(args);
+      const rows = series.filter(
+        (s) =>
+          (!args.filter_format || args.filter_format === s.format) &&
+          (!args.search_term ||
+            s.title.toLowerCase().includes(args.search_term.toLowerCase())),
+      );
+      return send({
+        items: rows
+          .slice(args.page_index * 24, (args.page_index + 1) * 24)
+          .map((s) => ({
+            ...s,
+            reading_state: "reading",
+            chapter_count: 1,
+            completed_count: 0,
+          })),
+        totalCount: rows.length,
+        hasMore: rows.length > (args.page_index + 1) * 24,
+      });
+    }
+    if (url.pathname.endsWith("/rpc/reader_work_page"))
+      return send({
+        series: {
+          ...series[0],
+          description: "An original local work.",
+          owner_id: userB,
+        },
+        books:
+          request.postDataJSON().page_index === 0
+            ? [localBook]
+            : [{ ...localBook, id: "book-100", chapter_number: 101 }],
+        volumes: [],
+        progress: [],
+        firstBook: localBook,
+        lastRead: state.progress ? localBook : null,
+        chapterCount: 101,
+        completedCount: 0,
+        volumeCount: 0,
+        hasMore: request.postDataJSON().page_index === 0,
+      });
+    if (url.pathname.endsWith("/rpc/reader_navigation_neighbors"))
+      return send([{ previous_id: null, next_id: null }]);
+    if (url.pathname.endsWith("/rpc/save_reading_position")) {
+      const args = request.postDataJSON();
+      state.progressWrites.push(args);
+      if (state.failSave) {
+        state.failSave = false;
+        return send({ message: "network failure", code: "FETCH" }, 503);
+      }
+      const stamp = new Date().toISOString();
+      state.progress = {
+        ...args.reading_position,
+        updated_at: stamp,
+        owner_id: id,
+        book_id: "book-0",
+      };
+      return send(stamp);
+    }
+    if (url.pathname.endsWith("/rpc/patch_profile_settings")) {
+      state.preferences = {
+        ...state.preferences,
+        ...request.postDataJSON().settings,
+      };
+      return send(state.preferences);
+    }
     if (url.pathname.endsWith("/rest/v1/beta_access"))
       return send([
         {
@@ -127,16 +225,59 @@ async function setup(id, admin = false) {
         avatar: "✦",
         avatar_path: null,
         banner_path: null,
-        preferences: { theme: "dark", fontSize: 22, fontFamily: "serif" },
+        preferences: {
+          ...state.preferences,
+          theme: "dark",
+          fontSize: 22,
+          fontFamily: "serif",
+        },
       };
       return send(
         request.headers().accept?.includes("vnd.pgrst.object") ? row : [row],
       );
     }
-    if (url.pathname.endsWith("/rest/v1/books"))
-      return send({ message: "Local media shell fixture" }, 400);
+    if (url.pathname.endsWith("/rest/v1/books")) {
+      const row =
+        url.searchParams.get("id") === "eq.book-3"
+          ? {
+              ...localBook,
+              id: "book-3",
+              file_path: `${userB}/local.cbz`,
+              media_type: "cbz",
+              total_pages: 3,
+            }
+          : localBook;
+      return send(
+        request.headers().accept?.includes("vnd.pgrst.object") ? row : [row],
+      );
+    }
+    if (url.pathname.endsWith("/rest/v1/reading_bookmarks")) {
+      if (request.method() === "POST") {
+        const row = {
+          ...request.postDataJSON(),
+          id: "bookmark-local",
+          created_at: "2026-01-01",
+        };
+        state.bookmarks.push(row);
+        return send(
+          request.headers().accept?.includes("vnd.pgrst.object") ? row : [row],
+        );
+      }
+      return send(state.bookmarks);
+    }
+    if (
+      ["volumes", "comments", "profile_identities"].some((table) =>
+        url.pathname.endsWith(`/rest/v1/${table}`),
+      )
+    )
+      return send([]);
     if (url.pathname.endsWith("/rest/v1/reading_progress")) {
-      if (url.searchParams.has("book_id")) return send([]);
+      if (url.searchParams.has("book_id"))
+        return send(
+          state.progress && url.searchParams.get("book_id") === "eq.book-0"
+            ? [state.progress]
+            : [],
+        );
       const params = url.searchParams;
       assert.equal(params.get("owner_id"), `eq.${id}`);
       assert.equal(params.get("order"), "updated_at.desc,book_id.asc");
@@ -159,6 +300,7 @@ async function setup(id, admin = false) {
     if (url.pathname.endsWith("/rest/v1/favorites")) return send([]);
     if (url.pathname.endsWith("/rest/v1/series")) {
       const format = url.searchParams.get("format")?.replace("eq.", "");
+      const seriesId = url.searchParams.get("id")?.replace("eq.", "");
       const term = url.searchParams
         .get("title")
         ?.replace(/^ilike\.\*?|%/g, "")
@@ -167,6 +309,7 @@ async function setup(id, admin = false) {
         series.filter(
           (s) =>
             (!format || s.format === format) &&
+            (!seriesId || s.id === seriesId) &&
             (!term || s.title.toLowerCase().includes(term)),
         ),
       );
@@ -183,6 +326,24 @@ async function setup(id, admin = false) {
         body: cover(index),
       });
     }
+    if (url.pathname.includes("/storage/v1/object/sign/novels/")) {
+      if (request.method() === "POST")
+        return send({
+          signedURL: url.pathname.replace("/storage/v1", "") + "?token=local",
+        });
+      if (url.pathname.endsWith("local.cbz"))
+        return route.fulfill({
+          status: 200,
+          contentType: "application/zip",
+          body: readFileSync("tests/fixtures/nook-original.cbz"),
+        });
+      return route.fulfill({
+        status: 200,
+        contentType: "application/pdf",
+        body: originalPdf(),
+      });
+    }
+    unexpected.push(url.pathname);
     return route.abort();
   });
   await page.goto(origin);
@@ -346,7 +507,7 @@ try {
   ).toHaveCount(0);
   const historyCount = state.historyRequests.length;
   await page
-    .getByRole("textbox", { name: "Busca global de obras" })
+    .getByRole("searchbox", { name: "Busca global de obras" })
     .fill("jardim");
   await expect(page.locator(".series-grid .series-card")).toHaveCount(1);
   assert.equal(state.historyRequests.length, historyCount);
@@ -375,6 +536,9 @@ try {
   await expect(page.locator(".series-card").first()).toBeVisible();
   await expect(page.locator(".recent-section")).toHaveCount(0);
   state.empty = false;
+  await page.goto(origin);
+  await page.getByRole("button", { name: "Limpar filtros" }).click();
+  await expect(page.locator(".history-card").first()).toBeVisible();
   state.error = true;
   await page.goto(origin);
   await expect(page.locator(".history-error")).toBeVisible();
@@ -393,7 +557,99 @@ try {
     second.page.getByRole("link", { name: "Administrar acervo" }),
   ).toBeVisible();
   await page.setViewportSize({ width: 1440, height: 900 });
+  // Client routing, real PDF.js worker/rendering, fallback and save recovery in Next.
+  await page.goto(origin);
+  await page.locator('.series-title[href="/series/series-0"]').click();
+  await expect(
+    page.getByRole("heading", { name: titles[0], exact: true }),
+  ).toBeVisible();
+  const start = page.getByRole("link", { name: "Começar →", exact: true });
+  await expect(start).toHaveAttribute("href", "/read/book-0");
+  await page.getByRole("button", { name: "Mais capítulos" }).click();
+  await expect(page.getByText("Página 2", { exact: true })).toBeVisible();
+  await expect(start).toHaveAttribute("href", "/read/book-0");
+  await start.click();
+  await expect(page.locator(".reflow-text").first()).toContainText(
+    "Original local paragraph",
+  );
+  await expect(page.getByText("Página 2 sem texto extraível.")).toBeVisible();
+  await page.getByRole("button", { name: "Ver no PDF", exact: true }).click();
+  await expect(page.locator("canvas").first()).toBeVisible();
+  assert.ok(
+    await page
+      .locator("canvas")
+      .first()
+      .evaluate((canvas) => canvas.width > 0 && canvas.height > 0),
+  );
+  await page.screenshot({
+    path: join(output, "pdf-original-1440.png"),
+    animations: "disabled",
+  });
+  await page.getByRole("button", { name: "Marcadores", exact: true }).click();
+  await page.getByLabel("Nome opcional").fill("Local test position");
+  await page.getByRole("button", { name: "Salvar posição atual" }).click();
+  await expect(
+    page.getByRole("button", { name: /^Local test position/ }),
+  ).toBeVisible();
+  assert.equal(state.bookmarks[0].page_number, 2);
+  await page.getByRole("button", { name: "Fechar marcadores" }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect
+    .poll(() =>
+      page
+        .locator("canvas")
+        .first()
+        .evaluate((canvas) =>
+          Math.abs(
+            canvas.getBoundingClientRect().width /
+              canvas.getBoundingClientRect().height -
+              612 / 792,
+          ),
+        ),
+    )
+    .toBeLessThan(0.02);
+  await page.screenshot({
+    path: join(output, "pdf-original-390.png"),
+    animations: "disabled",
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.waitForTimeout(1100); // Finish the reader's scroll-save debounce before injecting one failure.
+  state.failSave = true;
+  await page
+    .getByRole("button", { name: "Voltar à biblioteca", exact: true })
+    .click();
+  await expect(page.locator(".reader-save-feedback")).toContainText(
+    "Falha de conexão",
+  );
+  assert.ok(page.url().includes("/read/book-0"));
+  await page.getByRole("button", { name: "Tentar salvar novamente" }).click();
+  await expect(
+    page.getByRole("heading", { name: titles[0], exact: true }),
+  ).toBeVisible();
+  assert.ok(state.progressWrites.length >= 2);
+  assert.equal(state.progress.page_number, 2);
+  await page.getByRole("link", { name: "Continuar →", exact: true }).click();
+  await expect(page.locator(".reader-page-count")).toContainText("p. 2 / 2");
+  await page.getByRole("button", { name: "Marcadores", exact: true }).click();
+  await page.getByRole("button", { name: /^Local test position/ }).click();
+  await expect(
+    page.getByRole("dialog", { name: "Marcadores deste capítulo" }),
+  ).toHaveCount(0);
+  await expect(page.locator(".reader-page-count")).toContainText("p. 2 / 2");
+  await page
+    .getByRole("button", { name: "Voltar à biblioteca", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: titles[0], exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("link", { name: "Nook, voltar à biblioteca", exact: true })
+    .click();
+  await expect(page.locator(".series-card").first()).toBeVisible();
   await page.goto(origin + "/media/book-3");
+  await expect(
+    page.getByRole("img", { name: "Página 1", exact: true }),
+  ).toBeVisible();
   await expect(page.locator(".navigation-shell")).toHaveAttribute(
     "data-immersive",
     "true",
@@ -404,9 +660,39 @@ try {
       page.evaluate(() => getComputedStyle(document.body).paddingLeft),
     )
     .toBe("82px");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Uma página por vez" }).click();
+  await expect(page.locator(".cbz-page:visible")).toHaveCount(1);
+  await page.getByRole("button", { name: "Próxima →", exact: true }).click();
+  await expect(
+    page.getByRole("img", { name: "Página 2", exact: true }),
+  ).toBeVisible();
+  await expect
+    .poll(async () =>
+      Math.round((await page.locator(".mobile-navigation").boundingBox()).y),
+    )
+    .toBe(0);
+  const comicControls = await page.locator(".cbz-controls").boundingBox();
+  const comicImage = await page
+    .getByRole("img", { name: "Página 2", exact: true })
+    .boundingBox();
+  assert.ok(
+    comicControls.y >= 59 && comicControls.y + comicControls.height < 844,
+    "Page controls remain visible on mobile.",
+  );
+  assert.ok(
+    comicImage.y >= comicControls.y + comicControls.height - 2,
+    "The comic page is not covered by its controls.",
+  );
+  await page.screenshot({
+    path: join(output, "cbz-page-390.png"),
+    animations: "disabled",
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(origin + "/about");
   await expect(page.locator(".navigation-rail")).toBeVisible();
   assert.deepEqual(failures, []);
+  assert.deepEqual(unexpected, []);
   console.log(
     JSON.stringify(
       {
@@ -414,7 +700,7 @@ try {
         viewports: results,
         screenshots: output,
         checks:
-          "Personal history, category filtering before limit, order, completed and unknown totals, search independence, rail, drawer/Escape, admin visibility, empty/error/retry, UTF-8 content",
+          "Personal history, category filtering, rail, drawer/Escape, account isolation, real Next navigation/hydration, global work start after pagination, real PDF.js/CBZ workers, original PDF fallback, save failure/retry, return to catalog and mobile page mode",
       },
       null,
       2,

@@ -2,7 +2,7 @@
 import Link from "next/link";
 export function About({ onClose }: { onClose?: () => void }) {
   return (
-    <main className="welcome">
+    <main id="main-content" tabIndex={-1} className="welcome">
       <span className="logo">
         nook<span className="logo-dot">.</span>
       </span>
@@ -13,8 +13,8 @@ export function About({ onClose }: { onClose?: () => void }) {
         ficar mais um pouco.
       </h1>
       <p>
-        Um cantinho compartilhado para ler, assistir e conversar. Escolha uma
-        história. O resto pode esperar.
+        Um cantinho compartilhado para ler e conversar. Escolha uma história. O
+        resto pode esperar.
       </p>
       <div className="category-grid">
         {["Light Novels", "Mangás", "Manhwas"].map((x) => (

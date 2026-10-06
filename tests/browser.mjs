@@ -28,6 +28,18 @@ await new Promise((r) => server.listen(3199, "127.0.0.1", r));
 const browser = await chromium.launch();
 try {
   const page = await browser.newPage();
+  const base = new URL(
+    process.env.NOOK_BROWSER_BASE_URL || "http://localhost:3100",
+  );
+  assert.ok(
+    ["localhost", "127.0.0.1"].includes(base.hostname),
+    "Browser validation must remain local.",
+  );
+  await page.route("**/*", (route) =>
+    ["localhost", "127.0.0.1"].includes(new URL(route.request().url()).hostname)
+      ? route.continue()
+      : route.abort(),
+  );
   await page.goto("http://127.0.0.1:3199");
   const png = await page.evaluate(() => {
     const canvas = document.createElement("canvas");
@@ -96,18 +108,34 @@ try {
     const worker = new Worker("/worker.js");
     return new Promise((resolve, reject) => {
       const indices = [];
-      const timer = setTimeout(() => { worker.terminate(); reject(Error("rapid worker timeout")); }, 10000);
+      const timer = setTimeout(() => {
+        worker.terminate();
+        reject(Error("rapid worker timeout"));
+      }, 10000);
       worker.onmessage = ({ data }) => {
-        if (data.error) { clearTimeout(timer); worker.terminate(); reject(Error("worker failed")); return; }
-        if (data.names) { for (const index of [2, 0, 1, 2]) worker.postMessage({ index }); }
-        else { indices.push(data.index); if (indices.length === 4) { clearTimeout(timer); worker.terminate(); resolve(indices); } }
+        if (data.error) {
+          clearTimeout(timer);
+          worker.terminate();
+          reject(Error("worker failed"));
+          return;
+        }
+        if (data.names) {
+          for (const index of [2, 0, 1, 2]) worker.postMessage({ index });
+        } else {
+          indices.push(data.index);
+          if (indices.length === 4) {
+            clearTimeout(timer);
+            worker.terminate();
+            resolve(indices);
+          }
+        }
       };
       worker.postMessage({ archive: new Uint8Array(bytes).buffer });
     });
   }, Array.from(archive));
-  assert.deepEqual(rapid, [2,0,1,2]);
+  assert.deepEqual(rapid, [2, 0, 1, 2]);
 
-  const response = await page.goto("http://localhost:3100");
+  const response = await page.goto(base.href);
   assert.equal(response.headers()["x-content-type-options"], "nosniff");
   assert.equal(response.headers()["x-frame-options"], "DENY");
   assert.ok(response.headers()["content-security-policy-report-only"]);
@@ -125,16 +153,25 @@ try {
     modal.setAttribute("role", "dialog");
     modal.setAttribute("aria-modal", "true");
     modal.setAttribute("aria-label", "Local focus fixture");
-    modal.innerHTML = '<button aria-label="Fechar fixture" id="focus-close">Close</button><input autofocus id="focus-input">';
+    modal.innerHTML =
+      '<button aria-label="Fechar fixture" id="focus-close">Close</button><input autofocus id="focus-input">';
     modal.querySelector("button").onclick = () => modal.remove();
     document.body.append(modal);
     modal.querySelector("input").focus();
   });
   await page.keyboard.press("Tab");
-  assert.equal(await page.evaluate(() => document.activeElement.id), "focus-close");
+  assert.equal(
+    await page.evaluate(() => document.activeElement.id),
+    "focus-close",
+  );
   await page.keyboard.press("Escape");
-  assert.equal(await page.evaluate(() => document.activeElement.id), "focus-test-origin");
-  await page.evaluate(() => document.getElementById("focus-test-origin").remove());
+  assert.equal(
+    await page.evaluate(() => document.activeElement.id),
+    "focus-test-origin",
+  );
+  await page.evaluate(() =>
+    document.getElementById("focus-test-origin").remove(),
+  );
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.screenshot({
     path: "artifacts/browser/access-desktop.png",

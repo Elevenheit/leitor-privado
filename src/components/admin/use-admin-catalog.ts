@@ -1,59 +1,81 @@
 "use client";
-
-import { useCallback, useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getPrivateCoverUrl } from "@/lib/cover-url";
-import type { Book, ReadingProgress, Series, Volume } from "@/lib/types";
+import { listAdminWorks, type AdminSeries } from "@/lib/data/admin";
+import { toDataError } from "@/lib/data/errors";
+import type { Book } from "@/lib/types";
 
-export function useAdminCatalog(ownerId: string) {
+export function useAdminCatalog(
+  ownerId: string,
+  page: number,
+  query: string,
+  favoritesOnly: boolean,
+) {
   const [books, setBooks] = useState<Book[]>([]);
-  const [series, setSeries] = useState<Series[]>([]);
-  const [volumes, setVolumes] = useState<Volume[]>([]);
-  const [progress, setProgress] = useState<Record<string, ReadingProgress>>({});
+  const [series, setSeries] = useState<AdminSeries[]>([]);
   const [loading, setLoading] = useState(true);
   const [coverUrls, setCoverUrls] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
-
+  const [counts, setCounts] = useState({
+    totalCount: 0,
+    looseCount: 0,
+    fileCount: 0,
+    hasMore: false,
+  });
+  const generation = useRef(0);
   const load = useCallback(async () => {
-    const api = supabase();
-    const [bookResult, seriesResult, volumeResult, favoriteResult] = await Promise.all([
-      api.from("books").select("id,owner_id,title,original_filename,file_path,size_bytes,total_pages,created_at,series_id,volume_id,chapter_number,chapter_title,sort_order,content_type,media_type").eq("owner_id", ownerId).order("created_at", { ascending: false }),
-      api.from("series").select("id,owner_id,title,description,cover_path,created_at,updated_at,format,tags,rights_note,beta_visible").eq("owner_id", ownerId).order("title"),
-      api.from("volumes").select("id,owner_id,series_id,volume_number,title,description,sort_order,created_at,updated_at").eq("owner_id", ownerId).order("sort_order").order("volume_number"),
-      api.from("favorites").select("series_id").eq("owner_id", ownerId),
-    ]);
-    const bookIds = (bookResult.data || []).map((book) => book.id);
-    const progressResult = bookIds.length
-      ? await api.from("reading_progress").select("owner_id,book_id,page_number,line_index,scroll_ratio,reading_mode,updated_at,completed").eq("owner_id", ownerId).in("book_id", bookIds)
-      : { data: [], error: null };
-    const failure = bookResult.error || seriesResult.error || volumeResult.error || progressResult.error || favoriteResult.error;
-    if (failure) {
-      setError(failure.message);
-      setLoading(false);
-      return;
+    const request = ++generation.current;
+    setLoading(true);
+    try {
+      const result = await listAdminWorks(page, query, favoritesOnly, ownerId);
+      const covers = await Promise.all(
+        result.items
+          .filter((item) => item.cover_path)
+          .map(
+            async (item) =>
+              [
+                item.id,
+                await getPrivateCoverUrl(ownerId, item.cover_path!).catch(
+                  () => "",
+                ),
+              ] as const,
+          ),
+      );
+      if (request !== generation.current) return;
+      setBooks(result.looseBooks);
+      setSeries(result.items);
+      setCounts(result);
+      setCoverUrls(Object.fromEntries(covers));
+    } catch (cause) {
+      if (request === generation.current)
+        setError(
+          toDataError(cause, "Não foi possível carregar o acervo.").message,
+        );
+    } finally {
+      if (request === generation.current) setLoading(false);
     }
-
-    const nextBooks = (bookResult.data || []) as Book[];
-    const nextSeries = (seriesResult.data || []).map((item) => ({
-      ...item,
-      is_favorite: (favoriteResult.data || []).some((favorite) => favorite.series_id === item.id),
-    })) as Series[];
-    setBooks(nextBooks);
-    setSeries(nextSeries);
-    setVolumes((volumeResult.data || []) as Volume[]);
-    setProgress(Object.fromEntries(((progressResult.data || []) as ReadingProgress[]).map((item) => [item.book_id, item])));
-    setError("");
-    const signedCovers = await Promise.all(nextSeries.filter((item) => item.cover_path).map(async (item) => {
-      return [item.id, await getPrivateCoverUrl(ownerId, item.cover_path!).catch(() => "")] as const;
-    }));
-    setCoverUrls(Object.fromEntries(signedCovers.filter(([, url]) => url)));
-    setLoading(false);
-  }, [ownerId]);
-
+  }, [ownerId, page, query, favoritesOnly]);
   useEffect(() => {
-    const timer = setTimeout(() => void load(), 0);
-    return () => clearTimeout(timer);
+    const requests = generation;
+    const timer = setTimeout(() => {
+      setError("");
+      void load();
+    }, 250);
+    return () => {
+      clearTimeout(timer);
+      requests.current++;
+    };
   }, [load]);
-
-  return { books, setBooks, series, setSeries, volumes, setVolumes, progress, loading, coverUrls, load, error, setError };
+  return {
+    books,
+    setBooks,
+    series,
+    setSeries,
+    loading,
+    coverUrls,
+    load,
+    error,
+    setError,
+    ...counts,
+  };
 }

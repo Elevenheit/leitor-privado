@@ -1,48 +1,68 @@
 "use client";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { getWorkPage } from "@/lib/data/catalog";
+import type { Book, ReadingProgress, Volume } from "@/lib/types";
 
-import { useCallback, useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
-import type { Book, ReadingProgress } from "@/lib/types";
-
-export function useReaderIndex(book: Pick<Book, "series_id"> | null, userId: string, open: boolean) {
+export function useReaderIndex(
+  book: Pick<Book, "series_id"> | null,
+  userId: string,
+  open: boolean,
+) {
   const [books, setBooks] = useState<Book[]>([]);
+  const [volumes, setVolumes] = useState<Volume[]>([]);
   const [progress, setProgress] = useState<Record<string, ReadingProgress>>({});
   const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-
+  const page = useRef(0);
+  const pending = useRef(false);
+  const generation = useRef(0);
+  const seriesId = book?.series_id;
   const loadPage = useCallback(async () => {
-    if (!book || loading || !hasMore) return;
+    if (seriesId === undefined || pending.current || !hasMore) return;
+    pending.current = true;
+    const request = generation.current;
     setLoading(true);
+    setError("");
     try {
-      const api = supabase();
-      let query = api.from("books").select("id,owner_id,title,original_filename,file_path,size_bytes,total_pages,created_at,series_id,volume_id,chapter_number,chapter_title,sort_order,content_type,media_type");
-      query = book.series_id ? query.eq("series_id", book.series_id) : query.is("series_id", null);
-      const result = await query.order("sort_order").order("chapter_number").order("id").range(books.length, books.length + 99);
-      if (result.error) throw result.error;
-      const rows = (result.data || []) as Book[];
-      if (rows.length) {
-        const saved = await api.from("reading_progress")
-          .select("owner_id,book_id,page_number,line_index,scroll_ratio,reading_mode,updated_at,completed")
-          .eq("owner_id", userId).in("book_id", rows.map(item => item.id));
-        if (saved.error) throw saved.error;
-        setBooks(previous => [...previous, ...rows]);
-        setProgress(previous => ({ ...previous, ...Object.fromEntries(((saved.data || []) as ReadingProgress[]).map(item => [item.book_id, item])) }));
-      }
-      setHasMore(rows.length === 100);
+      const result = await getWorkPage(seriesId, page.current, userId);
+      if (request !== generation.current) return;
+      setBooks((previous) => [...previous, ...result.books]);
+      setVolumes((previous) => [
+        ...new Map(
+          [...previous, ...result.volumes].map((volume) => [volume.id, volume]),
+        ).values(),
+      ]);
+      setProgress((previous) => ({
+        ...previous,
+        ...Object.fromEntries(
+          result.progress.map((item) => [item.book_id, item]),
+        ),
+      }));
+      setHasMore(result.hasMore);
+      page.current++;
     } catch {
-      setError("Não foi possível carregar o índice da obra.");
-      setHasMore(false);
+      if (request === generation.current)
+        setError(
+          "Não foi possível carregar o índice da obra. Tente novamente.",
+        );
     } finally {
-      setLoading(false);
+      if (request === generation.current) {
+        pending.current = false;
+        setLoading(false);
+      }
     }
-  }, [book, books.length, hasMore, loading, userId]);
-
+  }, [seriesId, hasMore, userId]);
   useEffect(() => {
-    if (!open || books.length || !hasMore || loading) return;
+    const requests = generation;
+    return () => {
+      requests.current++;
+    };
+  }, [userId]);
+  useEffect(() => {
+    if (!open || books.length || error || loading) return;
     const timer = setTimeout(() => void loadPage(), 0);
     return () => clearTimeout(timer);
-  }, [open, books.length, hasMore, loading, loadPage]);
-
-  return { books, progress, hasMore, loading, error, loadPage };
+  }, [open, books.length, error, loading, loadPage]);
+  return { books, volumes, progress, hasMore, loading, error, loadPage };
 }
