@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { BookImage, BookOpen, Layers } from "lucide-react";
 export function About({ onClose }: { onClose?: () => void }) {
   return (
     <main id="main-content" tabIndex={-1} className="welcome">
@@ -17,10 +18,15 @@ export function About({ onClose }: { onClose?: () => void }) {
         resto pode esperar.
       </p>
       <div className="category-grid">
-        {["Light Novels", "Mangás", "Manhwas"].map((x) => (
-          <article key={x}>
-            <h2>{x}</h2>
-          </article>
+        {[
+          { label: "Light Novels", href: "/category/novel", icon: BookOpen },
+          { label: "Mangás", href: "/category/manga", icon: BookImage },
+          { label: "Manhwas", href: "/category/manhwa", icon: Layers },
+        ].map(({ label, href, icon: Icon }) => (
+          <Link key={href} href={href}>
+            <Icon size={26} strokeWidth={1.5} aria-hidden="true" />
+            <h2>{label}</h2>
+          </Link>
         ))}
       </div>
       <div className="welcome-notes">

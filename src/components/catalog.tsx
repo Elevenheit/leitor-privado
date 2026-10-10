@@ -14,6 +14,7 @@ import { setFavorite } from "@/lib/data/favorites";
 import { toDataError } from "@/lib/data/errors";
 import { formats, type Format } from "@/lib/catalog";
 import { catalogContextKey, parseCatalogContext } from "@/lib/catalog-context";
+import { invalidateCatalogSnapshot } from "@/lib/data/catalog-cache";
 import { Nav } from "./nav";
 import { RecentHistory } from "./recent-history";
 import { SeriesCover } from "./series/series-cover";
@@ -21,17 +22,23 @@ export function Catalog({
   user,
   format,
   list = false,
+  library = false,
+  search = false,
 }: {
   user: User;
   format?: Format;
   list?: boolean;
+  library?: boolean;
+  search?: boolean;
 }) {
   return (
     <CatalogView
-      key={`${user.id}:${format || "all"}:${list}`}
+      key={`${user.id}:${format || "all"}:${list}:${library}:${search}`}
       user={user}
       format={format}
       list={list}
+      library={library}
+      search={search}
     />
   );
 }
@@ -39,15 +46,32 @@ function CatalogView({
   user,
   format,
   list,
+  library,
+  search,
 }: {
   user: User;
   format?: Format;
   list: boolean;
+  library: boolean;
+  search: boolean;
 }) {
   const [items, setItems] = useState<CatalogSeries[]>([]);
   const [covers, setCovers] = useState<Record<string, string>>({});
   const [favs, setFavs] = useState<string[]>([]);
   const [q, setQ] = useState("");
+  const [category, setCategory] = useState<Format | undefined>(format);
+  const [publicName, setPublicName] = useState("");
+  const [greeting, setGreeting] = useState("Bem-vindo de volta");
+  const home = !format && !list && !library && !search;
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      const hour = new Date().getHours();
+      setGreeting(
+        hour < 12 ? "Bom dia" : hour < 18 ? "Boa tarde" : "Boa noite",
+      );
+    });
+    return () => cancelAnimationFrame(frame);
+  }, []);
   const [page, setPage] = useState(0);
   const [readingState, setReadingState] = useState<ReadingState>("all");
   const [order, setOrder] = useState<CatalogOrder>("recent");
@@ -57,7 +81,15 @@ function CatalogView({
   const pendingFavorites = useRef(new Set<string>());
   const contextKey = catalogContextKey(
     user.id,
-    list ? "/list" : format ? `/category/${format}` : "/",
+    list
+      ? "/list"
+      : search
+        ? "/search"
+        : library
+          ? "/library"
+          : format
+            ? `/category/${format}`
+            : "/",
   );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -76,11 +108,12 @@ function CatalogView({
       setPage(context.page);
       setReadingState(context.readingState);
       setOrder(context.order);
+      setCategory(format || context.category);
       restoreScroll.current = context.scroll;
       setRestored(true);
     }, 0);
     return () => clearTimeout(timer);
-  }, [contextKey]);
+  }, [contextKey, format]);
   useEffect(() => {
     if (!restored) return;
     const persist = () => {
@@ -92,27 +125,46 @@ function CatalogView({
             page,
             readingState,
             order,
+            category,
             scroll: restoreScroll.current ?? window.scrollY,
           }),
         );
         sessionStorage.setItem(
           catalogContextKey(user.id, "last-route"),
-          list ? "/list" : format ? `/category/${format}` : "/",
+          list
+            ? "/list"
+            : search
+              ? "/search"
+              : library
+                ? "/library"
+                : format
+                  ? `/category/${format}`
+                  : "/",
         );
       } catch {
         /* Optional context. */
       }
     };
     persist();
-    window.addEventListener("scroll", persist, { passive: true });
+    let scrollTimer: ReturnType<typeof setTimeout> | null = null;
+    const queuePersist = () => {
+      if (!scrollTimer)
+        scrollTimer = setTimeout(() => {
+          scrollTimer = null;
+          persist();
+        }, 250);
+    };
+    window.addEventListener("scroll", queuePersist, { passive: true });
     window.addEventListener("pagehide", persist);
     return () => {
       persist();
-      window.removeEventListener("scroll", persist);
+      if (scrollTimer) clearTimeout(scrollTimer);
+      window.removeEventListener("scroll", queuePersist);
       window.removeEventListener("pagehide", persist);
     };
   }, [
     contextKey,
+    category,
     restored,
     q,
     page,
@@ -120,6 +172,8 @@ function CatalogView({
     order,
     user.id,
     list,
+    search,
+    library,
     format,
   ]);
   useEffect(() => {
@@ -142,7 +196,7 @@ function CatalogView({
         const result = await listCatalogPage({
           ownerId: user.id,
           page,
-          format,
+          format: category,
           favoritesOnly: list,
           search: q,
           readingState,
@@ -159,6 +213,7 @@ function CatalogView({
         setItems(rows);
         setMore(result.hasMore);
         setTotal(result.totalCount);
+        setLoading(false);
         const c = await Promise.all(
           rows
             .filter((x) => x.cover_path)
@@ -186,7 +241,36 @@ function CatalogView({
       live = false;
       clearTimeout(timer);
     };
-  }, [user.id, format, list, q, page, attempt, readingState, order, restored]);
+  }, [
+    user.id,
+    category,
+    list,
+    q,
+    page,
+    attempt,
+    readingState,
+    order,
+    restored,
+  ]);
+  useEffect(() => {
+    const refresh = () => {
+      invalidateCatalogSnapshot();
+      setAttempt((value) => value + 1);
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    window.addEventListener("nook-progress-changed", refresh);
+    window.addEventListener("nook-progress-synced", refresh);
+    window.addEventListener("pageshow", refresh);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("nook-progress-changed", refresh);
+      window.removeEventListener("nook-progress-synced", refresh);
+      window.removeEventListener("pageshow", refresh);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
   async function favorite(id: string) {
     if (pendingFavorites.current.has(id)) return;
     pendingFavorites.current.add(id);
@@ -210,21 +294,39 @@ function CatalogView({
   }
   return (
     <>
-      <Nav />
+      <Nav onProfileLoad={setPublicName} />
       <main
         id="main-content"
         tabIndex={-1}
         className="dashboard beta-dashboard"
       >
-        <header className="catalog-heading">
+        <header className={`catalog-heading${home ? " home-heading" : ""}`}>
+          {home && (
+            <p className="home-greeting">
+              {greeting}
+              {publicName ? `, ${publicName}` : ""}. Sua próxima história está
+              esperando.
+            </p>
+          )}
           <span className="eyebrow">Sua biblioteca particular</span>
-          <h1>{format ? formats[format] : list ? "Minha lista" : "Início"}</h1>
+          <h1>
+            {format
+              ? formats[format]
+              : list
+                ? "Minha lista"
+                : search
+                  ? "Buscar"
+                  : library
+                    ? "Biblioteca"
+                    : "Início"}
+          </h1>
         </header>
         <div className="catalog-topbar" role="search" aria-label="Buscar obras">
           <label className="search catalog-search">
             <Search size={17} aria-hidden="true" />
             <input
               type="search"
+              autoFocus={search}
               aria-label={
                 format
                   ? `Buscar em ${formats[format]}`
@@ -268,7 +370,7 @@ function CatalogView({
             >
               <option value="all">Todas as obras</option>
               <option value="unread">Não iniciadas</option>
-              <option value="reading">Em leitura</option>
+              <option value="reading">Em andamento</option>
               <option value="completed">Concluídas</option>
             </select>
           </label>
@@ -288,7 +390,10 @@ function CatalogView({
               <option value="last-read">Última leitura</option>
             </select>
           </label>
-          {(q || readingState !== "all" || order !== "recent") && (
+          {(q ||
+            readingState !== "all" ||
+            order !== "recent" ||
+            category !== format) && (
             <button
               className="secondary-button"
               onClick={() => {
@@ -296,6 +401,7 @@ function CatalogView({
                 setQ("");
                 setReadingState("all");
                 setOrder("recent");
+                setCategory(format);
                 setPage(0);
               }}
             >
@@ -303,8 +409,62 @@ function CatalogView({
             </button>
           )}
         </div>
-        {!list && !q && readingState === "all" && page === 0 && (
-          <RecentHistory userId={user.id} format={format} featured={!format} />
+        <div className="catalog-filters">
+          <div
+            className="catalog-segments"
+            role="group"
+            aria-label="Biblioteca e leituras em andamento"
+          >
+            <button
+              aria-pressed={readingState === "all"}
+              onClick={() => {
+                setReadingState("all");
+                setPage(0);
+              }}
+            >
+              Minha biblioteca
+            </button>
+            <button
+              aria-pressed={readingState === "reading"}
+              onClick={() => {
+                setReadingState("reading");
+                setPage(0);
+              }}
+            >
+              Em andamento
+            </button>
+          </div>
+          {!format && (
+            <div
+              className="category-filters"
+              role="group"
+              aria-label="Categoria da obra"
+            >
+              {[
+                [undefined, "Todos"],
+                ["novel", "Light Novel"],
+                ["manga", "Mangá"],
+                ["manhwa", "Manhwa"],
+              ].map(([value, label]) => (
+                <button
+                  key={value || "all"}
+                  aria-pressed={category === value}
+                  onClick={() => {
+                    setCategory(value as Format | undefined);
+                    setPage(0);
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        {home && !q && readingState === "all" && page === 0 && (
+          <RecentHistory userId={user.id} format={category} />
+        )}
+        {format && !q && readingState === "all" && page === 0 && (
+          <RecentHistory userId={user.id} format={category} />
         )}
         <section
           className="library-section"
@@ -318,7 +478,7 @@ function CatalogView({
                 : readingState !== "all"
                   ? {
                       unread: "Para começar",
-                      reading: "Em leitura",
+                      reading: "Em andamento",
                       completed: "Histórias concluídas",
                     }[readingState]
                   : order === "title"
@@ -329,7 +489,7 @@ function CatalogView({
                         ? "Todos os títulos"
                         : list
                           ? "Guardados por você"
-                          : "Adicionados recentemente"}
+                          : "Minha biblioteca"}
             </h2>
             {!loading && !error && (
               <span className="catalog-count">
@@ -389,6 +549,11 @@ function CatalogView({
                   Limpar busca
                 </button>
               )}
+              {list && !q && readingState === "all" && (
+                <Link className="secondary-button" href="/library">
+                  Explorar a biblioteca
+                </Link>
+              )}
             </div>
           ) : (
             <div className="series-grid beta-covers">
@@ -412,10 +577,12 @@ function CatalogView({
                       {s.reading_state === "completed"
                         ? "Concluída"
                         : s.reading_state === "reading"
-                          ? `${s.completed_count}/${s.chapter_count} arquivos · Em leitura`
-                          : s.chapter_count
-                            ? `${s.chapter_count} arquivos · Não iniciada`
-                            : "Capítulos em breve"}
+                          ? `${s.completed_count}/${s.chapter_count} arquivos · Em andamento`
+                          : s.completed_count
+                            ? `${s.completed_count}/${s.chapter_count} arquivos concluídos`
+                            : s.chapter_count
+                              ? `${s.chapter_count} arquivos · Não iniciada`
+                              : "Capítulos em breve"}
                     </small>
                     <button
                       className="favorite-button"

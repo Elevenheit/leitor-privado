@@ -69,12 +69,16 @@ const database = {
   reading_progress: [
     {
       owner_id: "reader",
+      page_number: 9,
+      scroll_ratio: 0.4,
       book_id: books[0].id,
       completed: true,
       updated_at: "2026-02-01",
     },
     {
       owner_id: "reader",
+      page_number: 9,
+      scroll_ratio: 0.4,
       book_id: books[1004].id,
       completed: false,
       updated_at: "2026-03-01",
@@ -92,11 +96,26 @@ const database = {
   ],
 };
 const initial = JSON.stringify(database);
+const rpcCalls = [],
+  tableCalls = [];
 globalThis.fixtureApi = {
-  rpc: () => {
-    throw Error("New database functions must not be required.");
+  rpc: async (name, args) => {
+    assert.equal(name, "browse_catalog");
+    rpcCalls.push(args);
+    const items = series
+      .slice(args.page_index * 24, (args.page_index + 1) * 24)
+      .map((s) => ({ ...s, is_favorite: s.id === series[0].id }));
+    return {
+      data: {
+        items,
+        totalCount: series.length,
+        hasMore: args.page_index === 0,
+      },
+      error: null,
+    };
   },
   from: (table) => {
+    tableCalls.push(table);
     assert.ok(Object.hasOwn(database, table), table);
     const conditions = [];
     const orders = [];
@@ -116,6 +135,7 @@ globalThis.fixtureApi = {
         });
     const query = {
       select: () => query,
+      returns: () => query,
       eq: (key, value) => {
         conditions.push([key, value]);
         return query;
@@ -148,19 +168,27 @@ try {
   assert.equal(second.items.length, 6);
   assert.equal(first.totalCount, 30);
   assert.equal(second.hasMore, false);
-  const reading = await listCatalogPage({
-    ...options,
-    readingState: "reading",
-  });
-  assert.equal(reading.items.length, 1);
-  assert.equal(reading.items[0].chapter_count, 1005);
-  assert.equal(reading.items[0].completed_count, 1);
-  const favorites = await listCatalogPage({ ...options, favoritesOnly: true });
-  assert.deepEqual(favorites.favoriteIds, [series[0].id]);
   assert.equal(
-    (await listCatalogPage({ ...options, search: "Obra 29" })).totalCount,
-    1,
+    tableCalls.length,
+    0,
+    "Catalog must use bounded RPC, not download all books.",
   );
+  await listCatalogPage({
+    ...options,
+    search: "  CAPÍTULO   1004 ",
+    favoritesOnly: true,
+    readingState: "reading",
+    format: "novel",
+  });
+  assert.equal(rpcCalls.at(-1).search_term, "capitulo 1004");
+  assert.equal(rpcCalls.at(-1).favorites_only, true);
+  assert.equal(rpcCalls.at(-1).reading_state, "reading");
+  assert.equal(rpcCalls.at(-1).filter_format, "novel");
+  assert.ok(
+    !Object.hasOwn(rpcCalls[0], "owner_id"),
+    "Server scopes progress to auth.uid().",
+  );
+  assert.deepEqual(first.favoriteIds, [series[0].id]);
   const work = await getWorkPage(series[0].id, 10, "reader");
   assert.equal(work.chapterCount, 1005);
   assert.equal(work.books.length, 5);
@@ -185,7 +213,7 @@ try {
     "Browsing must not modify existing content.",
   );
   console.log(
-    "PASS: existing-table catalog/admin/work queries, complete pagination and account-scoped reading data; no new RPC or migration required.",
+    "PASS: bounded catalog RPC, normalized filters and existing admin/work queries with account-scoped data.",
   );
 } finally {
   delete globalThis.fixtureApi;

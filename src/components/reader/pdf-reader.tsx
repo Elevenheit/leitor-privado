@@ -1,9 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { toDataError } from "@/lib/data/errors";
+import { toDataError, reportDataError } from "@/lib/data/errors";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight } from "lucide-react";
+import {
+  ArrowLeft,
+  BookOpen,
+  ChevronLeft,
+  ChevronRight,
+  SlidersHorizontal,
+} from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -21,6 +27,8 @@ import { InlineIllustration } from "@/components/reader/inline-illustration";
 import { ReaderIndex } from "@/components/reader/reader-index";
 import { LazyPdfPage } from "@/components/reader/lazy-pdf-page";
 import { ReaderToolbar } from "@/components/reader/reader-toolbar";
+import { PdfNavigationPanel } from "@/components/reader/pdf-navigation-panel";
+import type { PdfSearchResult } from "@/hooks/use-pdf-navigation";
 import { useReaderIndex } from "@/hooks/use-reader-index";
 import {
   createReaderIllustrationExtractor,
@@ -30,6 +38,7 @@ import { BUCKET, supabase } from "@/lib/supabase";
 import { getReaderNavigationNeighbors } from "@/lib/data/reader-navigation";
 import {
   saveReadingProgress,
+  loadReadingProgress,
   ProgressConflictError,
 } from "@/lib/data/progress";
 import { patchProfileSettings } from "@/lib/data/preferences";
@@ -38,6 +47,9 @@ import {
   type ReaderPreferences,
 } from "@/lib/reader-preferences";
 import { calculateReadingProgress } from "@/lib/media-rules";
+import { useProgressPersistence } from "@/hooks/use-progress-persistence";
+import { consumeReaderRestart } from "@/lib/reader-restart";
+import { publishAppPreferences } from "@/lib/app-experience";
 import {
   createPrivateMediaUrl,
   isPrivateMediaAuthorizationError,
@@ -54,7 +66,13 @@ import type {
 
 type Mode = "text" | "page";
 type Theme = "dark" | "sepia" | "light";
-type Position = { page: number; line: number; ratio: number };
+type Position = {
+  page: number;
+  line: number;
+  ratio: number;
+  offset?: number;
+  character?: number;
+};
 type OrderedPageContent =
   | { type: "text"; position: number; index: number; block: ReadingBlock }
   | {
@@ -62,6 +80,26 @@ type OrderedPageContent =
       position: number;
       illustration: ReaderIllustration;
     };
+
+function captureTextPosition(segment: Element | null | undefined, top: number) {
+  const block = [
+    ...(segment?.querySelectorAll<HTMLElement>("[data-line]") || []),
+  ].find((node) => node.getBoundingClientRect().bottom > top);
+  const line = Number(block?.dataset.line || 0);
+  if (block?.firstChild?.nodeType !== Node.TEXT_NODE) return { line };
+  const text = block.firstChild;
+  const range = document.createRange();
+  let low = 0,
+    high = Math.max(0, (text.textContent?.length || 0) - 1);
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    range.setStart(text, mid);
+    range.setEnd(text, mid + 1);
+    if (range.getBoundingClientRect().bottom > top) high = mid;
+    else low = mid + 1;
+  }
+  return { line, character: low };
+}
 
 function orderPageContent(
   blocks: ReadingBlock[],
@@ -110,7 +148,7 @@ function Reader({ user, id }: { user: User; id: string }) {
   const [pages, setPages] = useState(0);
   const [mode, setMode] = useState<Mode>("text");
   const [theme, setTheme] = useState<Theme>("dark");
-  const [fontFamily, setFontFamily] = useState("serif");
+  const [fontFamily, setFontFamily] = useState<"serif" | "sans">("serif");
   const [fontSize, setFontSize] = useState(22);
   const [lineHeight, setLineHeight] = useState(1.85);
   const [textWidth, setTextWidth] = useState(760);
@@ -146,6 +184,8 @@ function Reader({ user, id }: { user: User; id: string }) {
   const [nextId, setNextId] = useState<string | null>(null);
 
   const [indexOpen, setIndexOpen] = useState(false);
+  const [documentNavigationOpen, setDocumentNavigationOpen] = useState(false);
+  const [documentQuery, setDocumentQuery] = useState("");
   const {
     books: libraryBooks,
     volumes: libraryVolumes,
@@ -159,17 +199,31 @@ function Reader({ user, id }: { user: User; id: string }) {
   const [restoreTick, setRestoreTick] = useState(0);
   const [focusMode, setFocusMode] = useState(false);
   const [focusControlsVisible, setFocusControlsVisible] = useState(false);
-  const focusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const focusEnteredAt = useRef(0);
+  const focusRecovery = useRef<HTMLButtonElement>(null);
+  const wasFocused = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveVersion = useRef(0);
   const pageRef = useRef(1);
   const modeRef = useRef<Mode>("text");
   const readyRef = useRef(false);
   const restoringRef = useRef<Position | null>(null);
-  const loadingRef = useRef(new Set<number>());
+  const restoredTextAnchor = useRef<{
+    page: number;
+    line: number;
+    character: number;
+    scrollTop: number;
+  } | null>(null);
+  const resizeAnchor = useRef<Position>({
+    page: 1,
+    line: 0,
+    ratio: 0,
+    offset: 0,
+  });
+  const lastTextAnchor = useRef<Position | null>(null);
+  const loadingRef = useRef(new Map<number, PDFDocumentProxy>());
+  const activePdf = useRef<PDFDocumentProxy | null>(null);
   const retainedPagesRef = useRef(new Set<number>());
+  const restart = useRef<boolean | null>(null);
 
   const orderedPages = useMemo(
     () => Array.from({ length: pages }, (_, i) => i + 1),
@@ -210,40 +264,71 @@ function Reader({ user, id }: { user: User; id: string }) {
     });
   }, [mode, textByPage, illustrationsByPage, illustrationStatus]);
 
+  const currentTextPosition = useCallback(
+    (root: HTMLElement, page: number, top: number) => {
+      const restored = restoredTextAnchor.current;
+      // Reflow can move the original character within the first visible line.
+      // Until the reader scrolls, successive changes must keep that character.
+      if (
+        modeRef.current === "text" &&
+        restored?.page === page &&
+        Math.abs(root.scrollTop - restored.scrollTop) < 1
+      )
+        return { line: restored.line, character: restored.character };
+      return captureTextPosition(
+        root.querySelector(`[data-page-segment="${page}"]`),
+        top,
+      );
+    },
+    [],
+  );
+
   const save = useCallback(async () => {
     if (!readyRef.current || restoringRef.current) return false;
     const container = scrollRef.current;
     if (!container) return;
+    const atEnd =
+      container.scrollTop + container.clientHeight >=
+      container.scrollHeight - 16;
+    if (atEnd) pageRef.current = pages;
     const version = ++saveVersion.current;
-    const ratio = Math.min(
-      1,
-      Math.max(
-        0,
-        container.scrollTop /
-          Math.max(1, container.scrollHeight - container.clientHeight),
-      ),
-    );
     const segment = container.querySelector<HTMLElement>(
       `[data-page-segment="${pageRef.current}"]`,
     );
     const visibleTop = container.getBoundingClientRect().top + 28;
-    const lines = segment?.querySelectorAll<HTMLElement>("[data-line]");
-    let lineIndex = 0;
-    if (lines)
-      for (const line of lines) {
-        if (line.getBoundingClientRect().bottom >= visibleTop) {
-          lineIndex = Number(line.dataset.line);
-          break;
-        }
-      }
+    const rect = segment?.getBoundingClientRect();
+    const offset = rect
+      ? Math.min(
+          1,
+          Math.max(0, (visibleTop - rect.top) / Math.max(1, rect.height)),
+        )
+      : 0;
+    const ratio = atEnd
+      ? 1
+      : (pageRef.current - 1 + offset) / Math.max(1, pages);
+    const textPosition = currentTextPosition(
+      container,
+      pageRef.current,
+      visibleTop,
+    );
+    const lineIndex = textPosition.line;
+    resizeAnchor.current = {
+      page: pageRef.current,
+      line: lineIndex,
+      ratio,
+      offset,
+      character: textPosition.character,
+    };
     setSaveState("Salvando…");
     try {
-      await saveReadingProgress(user.id, id, {
+      const result = await saveReadingProgress(user.id, id, {
         page_number: pageRef.current,
         line_index: lineIndex,
         scroll_ratio: ratio,
         reading_mode: modeRef.current,
         page_count: pages,
+        page_offset: offset,
+        text_offset: textPosition.character,
         completed: calculateReadingProgress({
           mediaType: "pdf",
           pageNumber: pageRef.current,
@@ -251,7 +336,8 @@ function Reader({ user, id }: { user: User; id: string }) {
           scrollRatio: ratio,
         }).completed,
       });
-      if (version === saveVersion.current) setSaveState("Salvo");
+      if (version === saveVersion.current)
+        setSaveState(result.synced ? "Salvo" : "Salvo neste dispositivo");
       if (version === saveVersion.current) {
         setSaveError("");
         setSaveConflict(false);
@@ -269,7 +355,8 @@ function Reader({ user, id }: { user: User; id: string }) {
       }
       return false;
     }
-  }, [id, user.id, pages]);
+  }, [id, user.id, pages, currentTextPosition]);
+  const scheduleSave = useProgressPersistence(save, !loading);
   const saveRef = useRef(save);
   useEffect(() => {
     saveRef.current = save;
@@ -281,6 +368,7 @@ function Reader({ user, id }: { user: User; id: string }) {
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     async function init() {
       try {
+        if (restart.current === null) restart.current = consumeReaderRestart();
         const api = supabase();
         const [bookResult, progressResult] = await Promise.all([
           api
@@ -290,21 +378,10 @@ function Reader({ user, id }: { user: User; id: string }) {
             )
             .eq("id", id)
             .single(),
-          api
-            .from("reading_progress")
-            .select(
-              "owner_id,book_id,page_number,line_index,scroll_ratio,reading_mode,updated_at,completed",
-            )
-            .eq("owner_id", user.id)
-            .eq("book_id", id)
-            .maybeSingle(),
+          loadReadingProgress(user.id, id),
         ]);
         if (bookResult.error || !bookResult.data)
           throw new Error("Capítulo não encontrado ou sem acesso.");
-        if (progressResult.error)
-          throw new Error(
-            "Não foi possível carregar seu progresso. Tente novamente antes de ler.",
-          );
         if (cancelled) return;
         const current = bookResult.data as Book;
         if (current.media_type === "cbz") {
@@ -345,7 +422,9 @@ function Reader({ user, id }: { user: User; id: string }) {
             : Promise.resolve({ data: null, error: null }),
           createPrivateMediaUrl(BUCKET, current.file_path),
         ]);
+        if (cancelled) return;
         const pdfjs = await import("pdfjs-dist");
+        if (cancelled) return;
         pdfjs.GlobalWorkerOptions.workerSrc = new URL(
           "pdfjs-dist/build/pdf.worker.min.mjs",
           import.meta.url,
@@ -365,10 +444,12 @@ function Reader({ user, id }: { user: User; id: string }) {
         } catch (cause) {
           if (!isPrivateMediaAuthorizationError(cause)) throw cause;
           await task.destroy();
+          if (cancelled) return;
           activePrivateUrl = await createPrivateMediaUrl(
             BUCKET,
             current.file_path,
           );
+          if (cancelled) return;
           task = openDocument(activePrivateUrl.url);
           loaded = await task.promise;
         }
@@ -387,7 +468,9 @@ function Reader({ user, id }: { user: User; id: string }) {
             }
           });
         }, refreshIn);
-        const saved = progressResult.data as ReadingProgress | null;
+        const saved = restart.current
+          ? null
+          : (progressResult as ReadingProgress | null);
         const start = Math.min(
           loaded.numPages,
           Math.max(1, saved?.page_number ?? 1),
@@ -396,6 +479,11 @@ function Reader({ user, id }: { user: User; id: string }) {
         setSeries(workResult.data as Series | null);
         setVolume(volumeResult.data as Volume | null);
         setPdf(loaded);
+        activePdf.current = loaded;
+        setTextByPage({});
+        setIllustrationsByPage({});
+        setIllustrationStatus({});
+        setLoadingPages(new Set());
         setPages(loaded.numPages);
         setCurrentPage(start);
         pageRef.current = start;
@@ -403,9 +491,25 @@ function Reader({ user, id }: { user: User; id: string }) {
           ? {
               page: start,
               line: saved.line_index || 0,
+              character: saved.text_offset,
               ratio: saved.scroll_ratio || 0,
+              offset:
+                saved.page_offset ??
+                Math.min(
+                  1,
+                  Math.max(
+                    0,
+                    saved.scroll_ratio * loaded.numPages - (start - 1),
+                  ),
+                ),
             }
           : null;
+        resizeAnchor.current = restoringRef.current || {
+          page: start,
+          line: 0,
+          ratio: 0,
+          offset: 0,
+        };
         setMode(saved?.reading_mode || "text");
         modeRef.current = saved?.reading_mode || "text";
         setActivePages(
@@ -441,8 +545,12 @@ function Reader({ user, id }: { user: User; id: string }) {
           setPreferenceError(
             "Não foi possível carregar as preferências da conta. Os ajustes locais continuam disponíveis.",
           );
-        else if (profile.data) applyPreferences(profile.data.preferences);
+        else if (profile.data) {
+          applyPreferences(profile.data.preferences);
+          publishAppPreferences(user.id, profile.data.preferences);
+        }
         readyRef.current = true;
+        restart.current = false;
         setLoading(false);
       } catch (cause) {
         if (!cancelled) {
@@ -462,7 +570,10 @@ function Reader({ user, id }: { user: User; id: string }) {
       cancelled = true;
       if (refreshTimer) clearTimeout(refreshTimer);
       readyRef.current = false;
-      if (task) void task.destroy();
+      lastTextAnchor.current = null;
+      activePdf.current = null;
+      if (task)
+        void task.destroy().catch((cause) => reportDataError(cause, "pdf"));
     };
   }, [id, user.id, urlGeneration, router]);
 
@@ -488,13 +599,18 @@ function Reader({ user, id }: { user: User; id: string }) {
             ?.getBoundingClientRect();
           return (
             rect &&
-            rect.bottom > viewport.top + 32 &&
+            rect.bottom >
+              viewport.top + Math.min(120, root.clientHeight * 0.25) &&
             rect.top < viewport.bottom
           );
         });
         const selected =
           restoringRef.current?.page ??
-          (inside.length ? Math.min(...inside) : pageRef.current);
+          (root.scrollTop + root.clientHeight >= root.scrollHeight - 16
+            ? pages
+            : inside.length
+              ? Math.min(...inside)
+              : pageRef.current);
         pageRef.current = selected;
         setCurrentPage(selected);
         const near = new Set<number>();
@@ -549,27 +665,29 @@ function Reader({ user, id }: { user: User; id: string }) {
     async (pageNo: number) => {
       if (
         !pdf ||
-        loadingRef.current.has(pageNo) ||
+        loadingRef.current.get(pageNo) === pdf ||
         textByPage[pageNo] !== undefined
       )
         return;
-      loadingRef.current.add(pageNo);
+      loadingRef.current.set(pageNo, pdf);
       setLoadingPages((previous) => new Set(previous).add(pageNo));
       try {
         const pdfPage = await pdf.getPage(pageNo);
         const content = await pdfPage.getTextContent();
         const blocks = extractReadingBlocks(content.items, pdfPage.view);
-        if (retainedPagesRef.current.has(pageNo))
+        if (activePdf.current === pdf && retainedPagesRef.current.has(pageNo))
           setTextByPage((previous) => ({ ...previous, [pageNo]: blocks }));
       } catch (cause) {
-        setError(
-          toDataError(
-            cause,
-            "Nao foi possivel extrair o texto desta pagina.",
-            "pdf",
-          ).message,
-        );
+        if (activePdf.current === pdf)
+          setError(
+            toDataError(
+              cause,
+              "Nao foi possivel extrair o texto desta pagina.",
+              "pdf",
+            ).message,
+          );
       } finally {
+        if (loadingRef.current.get(pageNo) !== pdf) return;
         loadingRef.current.delete(pageNo);
         setLoadingPages((previous) => {
           const next = new Set(previous);
@@ -609,14 +727,18 @@ function Reader({ user, id }: { user: User; id: string }) {
       void illustrationExtractor
         .get(pageNo, hasReadableText)
         .then((images) => {
-          if (images.length && retainedPagesRef.current.has(pageNo))
+          if (
+            activePdf.current === pdf &&
+            images.length &&
+            retainedPagesRef.current.has(pageNo)
+          )
             setIllustrationsByPage((previous) => ({
               ...previous,
               [pageNo]: images,
             }));
         })
         .finally(() => {
-          if (retainedPagesRef.current.has(pageNo))
+          if (activePdf.current === pdf && retainedPagesRef.current.has(pageNo))
             setIllustrationStatus((previous) => ({
               ...previous,
               [pageNo]: "complete",
@@ -630,6 +752,7 @@ function Reader({ user, id }: { user: User; id: string }) {
     activePages,
     textByPage,
     illustrationStatus,
+    pdf,
   ]);
 
   useEffect(() => {
@@ -642,65 +765,139 @@ function Reader({ user, id }: { user: User; id: string }) {
     if (!segment) return;
     if (modeRef.current === "text" && textByPage[saved.page] === undefined)
       return;
-    requestAnimationFrame(() => {
+    if (
+      modeRef.current === "page" &&
+      !segment.querySelector("canvas[data-ready='true']")
+    )
+      return;
+    if (
+      modeRef.current === "text" &&
+      showIllustrations &&
+      illustrationStatus[saved.page] !== "complete"
+    )
+      return;
+    const frame = requestAnimationFrame(() => {
       const target = segment.querySelector<HTMLElement>(
         `[data-line="${saved.line}"]`,
       );
-      if (target)
+      if (
+        target &&
+        saved.character !== undefined &&
+        target.firstChild?.nodeType === Node.TEXT_NODE
+      ) {
+        const range = document.createRange();
+        const text = target.firstChild;
+        const index = Math.min(
+          saved.character,
+          Math.max(0, (text.textContent?.length || 0) - 1),
+        );
+        range.setStart(text, index);
+        range.setEnd(text, Math.min(index + 1, text.textContent?.length || 0));
+        root.scrollTop +=
+          range.getBoundingClientRect().top -
+          root.getBoundingClientRect().top -
+          32;
+      } else if (target && saved.offset === undefined)
         root.scrollTop +=
           target.getBoundingClientRect().top -
           root.getBoundingClientRect().top -
           32;
-      else if (saved.ratio)
-        root.scrollTop =
-          saved.ratio * Math.max(0, root.scrollHeight - root.clientHeight);
-      else root.scrollTop = segment.offsetTop;
+      else
+        root.scrollTop +=
+          segment.getBoundingClientRect().top -
+          root.getBoundingClientRect().top -
+          28 +
+          (saved.offset || 0) * segment.getBoundingClientRect().height;
+      pageRef.current = saved.page;
+      restoredTextAnchor.current =
+        modeRef.current === "text" && saved.character !== undefined
+          ? {
+              page: saved.page,
+              line: saved.line,
+              character: saved.character,
+              scrollTop: root.scrollTop,
+            }
+          : null;
+      setCurrentPage(saved.page);
+      resizeAnchor.current = saved;
       restoringRef.current = null;
     });
-  }, [pages, textByPage, mode, restoreTick]);
+    return () => cancelAnimationFrame(frame);
+  }, [
+    pages,
+    textByPage,
+    mode,
+    restoreTick,
+    showIllustrations,
+    illustrationStatus,
+  ]);
+
+  const onPageReady = useCallback((page: number) => {
+    if (restoringRef.current?.page === page)
+      setRestoreTick((value) => value + 1);
+  }, []);
 
   useEffect(() => {
-    const onVisibility = () => {
-      if (document.visibilityState === "hidden") void save();
-    };
-    const onPageHide = () => void save();
-    document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("pagehide", onPageHide);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisibility);
-      window.removeEventListener("pagehide", onPageHide);
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-      void save();
-    };
-  }, [save]);
+    const root = scrollRef.current;
+    if (!root || loading) return;
+    let previousWidth = root.clientWidth;
+    const observer = new ResizeObserver(() => {
+      const width = root.clientWidth;
+      if (Math.abs(width - previousWidth) < 2) return;
+      previousWidth = width;
+      if (restoringRef.current || !readyRef.current) return;
+      const anchor = resizeAnchor.current;
+      restoringRef.current = { ...anchor };
+      setActivePages(
+        new Set([
+          Math.max(1, anchor.page - 1),
+          anchor.page,
+          Math.min(pages, anchor.page + 1),
+        ]),
+      );
+      setRestoreTick((value) => value + 1);
+    });
+    observer.observe(root);
+    return () => observer.disconnect();
+  }, [loading, pages]);
 
   const toggleFocusMode = useCallback(() => {
-    focusEnteredAt.current = focusMode ? 0 : performance.now();
-    if (focusTimer.current) clearTimeout(focusTimer.current);
-    focusTimer.current = null;
     setFocusControlsVisible(false);
-    setFocusMode(!focusMode);
-  }, [focusMode]);
+    setSettingsOpen(false);
+    setIndexOpen(false);
+    setBookmarksOpen(false);
+    setFocusMode((value) => !value);
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat) return;
       const target = event.target as HTMLElement | null;
-      if (target?.closest("input, textarea, select, [contenteditable='true']"))
+      if (
+        target?.closest(
+          "input, textarea, select, [contenteditable='true'], [role='dialog']",
+        )
+      )
         return;
       if (event.key === "Escape") {
-        focusEnteredAt.current = 0;
-        if (focusTimer.current) clearTimeout(focusTimer.current);
-        focusTimer.current = null;
-        setFocusMode(false);
-        setFocusControlsVisible(false);
-        setIndexOpen(false);
-        setBookmarksOpen(false);
+        if (settingsOpen) {
+          setSettingsOpen(false);
+          return;
+        }
+        if (indexOpen || bookmarksOpen || documentNavigationOpen) {
+          setIndexOpen(false);
+          setBookmarksOpen(false);
+          setDocumentNavigationOpen(false);
+          return;
+        }
+        if (focusControlsVisible) {
+          setFocusControlsVisible(false);
+          focusRecovery.current?.focus({ preventScroll: true });
+        } else setFocusMode(false);
         return;
       }
       if (
         event.key.toLowerCase() === "f" &&
-        !indexOpen &&
-        !bookmarksOpen &&
         !event.ctrlKey &&
         !event.metaKey &&
         !event.altKey
@@ -711,36 +908,99 @@ function Reader({ user, id }: { user: User; id: string }) {
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [indexOpen, bookmarksOpen, toggleFocusMode]);
+  }, [
+    indexOpen,
+    bookmarksOpen,
+    documentNavigationOpen,
+    settingsOpen,
+    focusControlsVisible,
+    toggleFocusMode,
+  ]);
 
-  useEffect(
-    () => () => {
-      if (focusTimer.current) clearTimeout(focusTimer.current);
-    },
-    [],
-  );
-
-  function revealFocusControls() {
-    if (!focusMode || performance.now() - focusEnteredAt.current < 900) return;
-    setFocusControlsVisible(true);
-    if (focusTimer.current) clearTimeout(focusTimer.current);
-    focusTimer.current = setTimeout(() => setFocusControlsVisible(false), 2800);
-  }
+  useEffect(() => {
+    if (focusMode) focusRecovery.current?.focus({ preventScroll: true });
+    else if (wasFocused.current)
+      document
+        .querySelector<HTMLButtonElement>(
+          '.reader-toolbar [aria-label="Ativar modo foco"]',
+        )
+        ?.focus({ preventScroll: true });
+    wasFocused.current = focusMode;
+  }, [focusMode]);
 
   function onScroll() {
     if (restoringRef.current) return;
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => void save(), 900);
+    const root = scrollRef.current;
+    if (root) {
+      const top = root.getBoundingClientRect().top + 28;
+      let low = 1,
+        high = pages;
+      while (low < high) {
+        const mid = Math.floor((low + high) / 2);
+        const node = root.querySelector<HTMLElement>(
+          `[data-page-segment="${mid}"]`,
+        );
+        if (
+          node &&
+          node.getBoundingClientRect().bottom <=
+            root.getBoundingClientRect().top +
+              Math.min(120, root.clientHeight * 0.25)
+        )
+          low = mid + 1;
+        else high = mid;
+      }
+      if (root.scrollTop + root.clientHeight >= root.scrollHeight - 16)
+        low = pages;
+      pageRef.current = low;
+      setCurrentPage((previous) => (previous === low ? previous : low));
+      const segment = root.querySelector<HTMLElement>(
+        `[data-page-segment="${low}"]`,
+      );
+      const rect = segment?.getBoundingClientRect();
+      const offset = rect
+        ? Math.min(1, Math.max(0, (top - rect.top) / Math.max(1, rect.height)))
+        : 0;
+      const line = [
+        ...(segment?.querySelectorAll<HTMLElement>("[data-line]") || []),
+      ].find((node) => node.getBoundingClientRect().bottom >= top);
+      resizeAnchor.current = {
+        page: low,
+        line: Number(line?.dataset.line || 0),
+        ratio: (low - 1 + offset) / Math.max(1, pages),
+        offset,
+      };
+    }
+    scheduleSave();
   }
   function updatePrefs(
     change: Partial<{
       fontSize: number;
+      fontFamily: "serif" | "sans";
       lineHeight: number;
       textWidth: number;
       theme: Theme;
       showIllustrations: boolean;
     }>,
   ) {
+    if (
+      modeRef.current === "text" &&
+      readyRef.current &&
+      (change.fontSize !== undefined ||
+        change.fontFamily !== undefined ||
+        change.lineHeight !== undefined ||
+        change.textWidth !== undefined ||
+        change.showIllustrations !== undefined)
+    ) {
+      const anchor: Position = { ...resizeAnchor.current };
+      const root = scrollRef.current;
+      const top = (root?.getBoundingClientRect().top || 0) + 32;
+      Object.assign(
+        anchor,
+        root ? currentTextPosition(root, pageRef.current, top) : {},
+      );
+      restoringRef.current = anchor;
+      setRestoreTick((value) => value + 1);
+    }
     const next = normalizeReaderPreferences({
       fontFamily,
       fontSize,
@@ -751,6 +1011,7 @@ function Reader({ user, id }: { user: User; id: string }) {
       ...change,
     });
     if (change.fontSize !== undefined) setFontSize(next.fontSize);
+    if (change.fontFamily !== undefined) setFontFamily(next.fontFamily);
     if (change.lineHeight !== undefined) setLineHeight(next.lineHeight);
     if (change.textWidth !== undefined) setTextWidth(next.textWidth);
     if (change.theme !== undefined) setTheme(next.theme);
@@ -784,9 +1045,54 @@ function Reader({ user, id }: { user: User; id: string }) {
       });
   }
   function setView(next: Mode) {
+    if (next === modeRef.current) return;
     const page = pageRef.current;
+    const root = scrollRef.current;
+    const top = (root?.getBoundingClientRect().top || 0) + 28;
+    const segment = root?.querySelector<HTMLElement>(
+      `[data-page-segment="${page}"]`,
+    );
+    const rect = segment?.getBoundingClientRect();
+    const offset = rect
+      ? Math.min(1, Math.max(0, (top - rect.top) / Math.max(1, rect.height)))
+      : 0;
+    // Text -> PDF uses the physical page fraction. PDF -> text maps that
+    // fraction to reflowed content; keep the precise text anchor if unchanged.
+    const anchor =
+      modeRef.current === "text" && root
+        ? currentTextPosition(root, page, top)
+        : null;
+    if (anchor)
+      lastTextAnchor.current = {
+        page,
+        offset,
+        ratio: (page - 1 + offset) / Math.max(1, pages),
+        ...anchor,
+      };
+    const remembered = lastTextAnchor.current;
+    const pendingModeRestore = restoringRef.current;
+    const samePosition =
+      next === "text" &&
+      remembered?.page === page &&
+      (Math.abs((remembered.offset ?? 0) - offset) < 0.015 ||
+        (pendingModeRestore?.page === page &&
+          pendingModeRestore.character === remembered.character &&
+          Math.abs(
+            (pendingModeRestore.offset ?? 0) - (remembered.offset ?? 0),
+          ) < 0.015));
+    restoringRef.current = {
+      page,
+      line: samePosition ? remembered!.line : (anchor?.line ?? 0),
+      ratio: (page - 1 + offset) / Math.max(1, pages),
+      offset,
+      character: samePosition
+        ? remembered!.character
+        : next === "text"
+          ? undefined
+          : anchor?.character,
+    };
     modeRef.current = next;
-    restoringRef.current = { page, line: 0, ratio: 0 };
+    resizeAnchor.current = restoringRef.current;
     setMode(next);
     setRestoreTick((value) => value + 1);
     setSettingsOpen(false);
@@ -819,15 +1125,32 @@ function Reader({ user, id }: { user: User; id: string }) {
     return {
       page_number: pageRef.current,
       line_index: lineIndex,
-      scroll_ratio: root
+      text_offset:
+        root && modeRef.current === "text"
+          ? currentTextPosition(root, pageRef.current, top).character
+          : undefined,
+      page_offset: segment
         ? Math.min(
             1,
             Math.max(
               0,
-              root.scrollTop /
-                Math.max(1, root.scrollHeight - root.clientHeight),
+              (top - segment.getBoundingClientRect().top) /
+                Math.max(1, segment.getBoundingClientRect().height),
             ),
           )
+        : 0,
+      scroll_ratio: segment
+        ? (pageRef.current -
+            1 +
+            Math.min(
+              1,
+              Math.max(
+                0,
+                (top - segment.getBoundingClientRect().top) /
+                  Math.max(1, segment.getBoundingClientRect().height),
+              ),
+            )) /
+          Math.max(1, pages)
         : 0,
     };
   }
@@ -837,7 +1160,16 @@ function Reader({ user, id }: { user: User; id: string }) {
     restoringRef.current = {
       page: targetPage,
       line: bookmark.line_index,
+      character: bookmark.text_offset ?? undefined,
       ratio: bookmark.scroll_ratio,
+      offset:
+        bookmark.page_offset ??
+        (modeRef.current === "text"
+          ? undefined // Legacy text bookmarks retain their original line anchor.
+          : Math.min(
+              1,
+              Math.max(0, bookmark.scroll_ratio * pages - (targetPage - 1)),
+            )),
     };
     setActivePages(
       new Set([
@@ -850,18 +1182,40 @@ function Reader({ user, id }: { user: User; id: string }) {
     setRestoreTick((value) => value + 1);
   }
 
+  function jumpInDocument(page: number, result?: PdfSearchResult) {
+    const target = Math.min(pages, Math.max(1, page));
+    if (result) {
+      modeRef.current = "text";
+      setMode("text");
+    }
+    restoringRef.current = {
+      page: target,
+      line: result?.line ?? 0,
+      character: result?.character,
+      ratio: (target - 1) / Math.max(1, pages),
+      offset: result ? undefined : 0,
+    };
+    setActivePages(
+      new Set([Math.max(1, target - 1), target, Math.min(pages, target + 1)]),
+    );
+    setRestoreTick((value) => value + 1);
+  }
+
   if (loading)
     return (
       <>
         <Nav back />
-        <main className="reader-status">Abrindo sua leitura…</main>
+        <main id="main-content" className="reader-status" aria-busy="true">
+          <span className="reader-loading-mark" />
+          Abrindo sua leitura…
+        </main>
       </>
     );
   if (error && !book)
     return (
       <>
         <Nav back />
-        <main className="reader-status">
+        <main id="main-content" className="reader-status">
           <BookOpen size={34} />
           <h1>Não foi possível abrir</h1>
           <p>{error}</p>
@@ -887,60 +1241,85 @@ function Reader({ user, id }: { user: User; id: string }) {
   return (
     <div
       className={`reader-app reader-theme-${theme} ${focusMode ? "focus-mode" : ""} ${focusControlsVisible ? "focus-controls-visible" : ""}`}
-      onMouseMove={revealFocusControls}
-      onTouchStart={revealFocusControls}
     >
-      <header className="reader-topbar">
+      {focusMode && (
         <button
-          className="reader-back"
-          aria-label="Voltar à biblioteca"
+          ref={focusRecovery}
+          className="focus-recovery"
+          aria-label={
+            focusControlsVisible
+              ? "Ocultar controles de leitura"
+              : "Mostrar controles de leitura"
+          }
+          aria-expanded={focusControlsVisible}
+          aria-controls="reader-chrome"
           onClick={() => {
-            void navigate(series ? `/series/${series.id}` : "/");
+            setSettingsOpen(false);
+            setFocusControlsVisible((value) => !value);
           }}
         >
-          <ArrowLeft size={18} />
-          <span>Biblioteca</span>
+          <SlidersHorizontal size={17} aria-hidden="true" />
         </button>
-        <div className="reader-heading">
-          <strong>{series?.title || book?.title}</strong>
-          <span>
-            {volume
-              ? volume.volume_number !== null
-                ? `Volume ${volume.volume_number}`
-                : volume.title
-              : ""}
-            {volume ? " · " : ""}
-            {pageCaption}
+      )}
+      <div
+        id="reader-chrome"
+        className="reader-chrome"
+        inert={focusMode && !focusControlsVisible}
+      >
+        <header className="reader-topbar">
+          <button
+            className="reader-back"
+            aria-label="Voltar à biblioteca"
+            onClick={() => {
+              void navigate(series ? `/series/${series.id}` : "/");
+            }}
+          >
+            <ArrowLeft size={18} />
+            <span>Biblioteca</span>
+          </button>
+          <div className="reader-heading">
+            <strong>{series?.title || book?.title}</strong>
+            <span>
+              {volume
+                ? volume.volume_number !== null
+                  ? `Volume ${volume.volume_number}`
+                  : volume.title
+                : ""}
+              {volume ? " · " : ""}
+              {pageCaption}
+            </span>
+          </div>
+          <span
+            className={`save-state ${saveState === "Salvo" ? "" : saveState === "Falha ao salvar" ? "save-state-error" : "save-state-active"}`}
+            aria-live="polite"
+          >
+            {saveState}
           </span>
-        </div>
-        <span
-          className={`save-state ${saveState === "Salvo" ? "" : saveState === "Falha ao salvar" ? "save-state-error" : "save-state-active"}`}
-          aria-live="polite"
-        >
-          {saveState}
-        </span>
-      </header>
-      <ReaderToolbar
-        mode={mode}
-        setView={setView}
-        previousId={previousId}
-        nextId={nextId}
-        setIndexOpen={setIndexOpen}
-        currentPage={currentPage}
-        pages={pages}
-        setBookmarksOpen={setBookmarksOpen}
-        focusMode={focusMode}
-        toggleFocusMode={toggleFocusMode}
-        settingsOpen={settingsOpen}
-        setSettingsOpen={setSettingsOpen}
-        fontSize={fontSize}
-        lineHeight={lineHeight}
-        textWidth={textWidth}
-        theme={theme}
-        showIllustrations={showIllustrations}
-        updatePrefs={updatePrefs}
-        onNavigate={(bookId) => void navigate(`/read/${bookId}`)}
-      />
+        </header>
+        <ReaderToolbar
+          onDocumentNavigation={() => setDocumentNavigationOpen(true)}
+          mode={mode}
+          setView={setView}
+          previousId={previousId}
+          nextId={nextId}
+          setIndexOpen={setIndexOpen}
+          currentPage={currentPage}
+          pages={pages}
+          setBookmarksOpen={setBookmarksOpen}
+          focusMode={focusMode}
+          toggleFocusMode={toggleFocusMode}
+          settingsOpen={settingsOpen}
+          setSettingsOpen={setSettingsOpen}
+          fontSize={fontSize}
+          fontFamily={fontFamily}
+          lineHeight={lineHeight}
+          textWidth={textWidth}
+          theme={theme}
+          showIllustrations={showIllustrations}
+          updatePrefs={updatePrefs}
+          onNavigate={(bookId) => void navigate(`/read/${bookId}`)}
+        />
+      </div>
       {saveError && (
         <div className="reader-save-feedback" role="alert">
           <p>{saveError}</p>
@@ -973,7 +1352,13 @@ function Reader({ user, id }: { user: User; id: string }) {
           </button>
         </div>
       )}
-      <div className="reader-scroll" ref={scrollRef} onScroll={onScroll}>
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="reader-scroll"
+        ref={scrollRef}
+        onScroll={onScroll}
+      >
         <div
           className={`continuous-document ${mode === "text" ? "text-document" : "pdf-document"}`}
           style={
@@ -1074,11 +1459,19 @@ function Reader({ user, id }: { user: User; id: string }) {
                   pdf={pdf!}
                   page={pageNo}
                   active={activePages.has(pageNo)}
+                  onReady={onPageReady}
                 />
               )}
             </section>
           ))}
-          {error && <div className="error">{error}</div>}
+          {error && (
+            <div className="error" role="alert">
+              {error}{" "}
+              <button onClick={() => location.reload()}>
+                Tentar novamente
+              </button>
+            </div>
+          )}
           <div className="chapter-navigation">
             <span>Fim do capítulo</span>
             <div>
@@ -1126,7 +1519,17 @@ function Reader({ user, id }: { user: User; id: string }) {
             </div>
           </div>
         </div>
-      </div>
+      </main>
+      {documentNavigationOpen && pdf && (
+        <PdfNavigationPanel
+          pdf={pdf}
+          currentPage={currentPage}
+          query={documentQuery}
+          setQuery={setDocumentQuery}
+          onJump={jumpInDocument}
+          onClose={() => setDocumentNavigationOpen(false)}
+        />
+      )}
       {indexOpen && (
         <ReaderIndex
           series={series}

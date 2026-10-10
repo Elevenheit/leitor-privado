@@ -46,3 +46,13 @@ const bombView = new DataView(bomb.buffer);
 for (let i = 0; i < bomb.length - 46; i++) if (bombView.getUint32(i, true) === 0x02014b50) bombView.setUint32(i + 24, 12 * 1024 * 1024, true);
 await assert.rejects(validateCbz(new File([bomb], "limit.cbz")), /160 MB/);
 console.log("PASS: declared decompressed total is rejected before decompression.");
+
+let validationReads = 0;
+const sharedFile = cbz({ "1.png": image });
+const slice = sharedFile.slice.bind(sharedFile);
+sharedFile.slice = (...args) => { validationReads++; return slice(...args); };
+await Promise.all([validateStorageUpload(sharedFile, "novels"), validateStorageUpload(sharedFile, "novels")]);
+await validateStorageUpload(sharedFile, "novels");
+assert.equal(validationReads, 2, "One header and one archive read, shared by concurrent preflight/transport validation");
+await assert.rejects(validateStorageUpload(sharedFile, "profiles"), /JPEG/);
+console.log("PASS: immutable file validation is deduplicated without bypassing bucket-specific checks.");

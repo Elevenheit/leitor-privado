@@ -1,4 +1,5 @@
 import { DialogFocusManager } from "@/components/modals/dialog-focus-manager";
+import { AppExperience } from "@/components/app-experience";
 import type { Metadata } from "next";
 import { Inter, Literata } from "next/font/google";
 import "./globals.css";
@@ -30,6 +31,7 @@ export default function RootLayout({
     >
       <body className="min-h-screen antialiased">
         <DialogFocusManager />
+        <AppExperience />
         {children}
       </body>
     </html>

@@ -3,9 +3,11 @@ name: Quality checks
 on:
   push:
     branches:
+      - main
       - feat/nook-closed-beta
   pull_request:
     branches:
+      - main
       - feat/nook-closed-beta
 
 permissions:

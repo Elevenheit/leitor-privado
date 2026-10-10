@@ -14,19 +14,16 @@ export function calculateReadingProgress(input: ReadingProgressInput) {
   if (input.mediaType === "pdf") {
     return {
       percent: Math.round(ratio * 100),
-      completed:
-        totalPages > 0 && pageNumber >= totalPages && ratio >= 0.95,
+      completed: totalPages > 0 && ratio >= 0.95,
     };
   }
-  const percent = totalPages > 0
-    ? Math.min(100, Math.round(((pageNumber - 1 + ratio) / totalPages) * 100))
-    : 0;
+  const percent =
+    totalPages > 0
+      ? Math.min(100, Math.round(((pageNumber - 1 + ratio) / totalPages) * 100))
+      : 0;
   return {
     percent,
-    completed:
-      totalPages > 0 &&
-      pageNumber >= totalPages &&
-      ratio >= 0.95,
+    completed: totalPages > 0 && (pageNumber - 1 + ratio) / totalPages >= 0.95,
   };
 }
 
@@ -35,7 +32,14 @@ export function naturalPages(names: string[]) {
     .filter(
       (n) =>
         /\.(png|jpe?g|webp)$/i.test(n) &&
-        !n.split("/").some((p) => p === "__MACOSX" || p.startsWith(".") || /^(?:thumbs?|thumbnails?)(?:\.[^.]+)?$/i.test(p)),
+        !n
+          .split("/")
+          .some(
+            (p) =>
+              p === "__MACOSX" ||
+              p.startsWith(".") ||
+              /^(?:thumbs?|thumbnails?)(?:\.[^.]+)?$/i.test(p),
+          ),
     )
     .sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
 }
@@ -85,17 +89,36 @@ export function validateComicImage(data: Uint8Array) {
       }
       offset += size;
     }
-  } else if (data.length >= 30 && data[0] === 82 && data[1] === 73 && data[2] === 70 && data[3] === 70 && data[8] === 87 && data[9] === 69 && data[10] === 66 && data[11] === 80) {
+  } else if (
+    data.length >= 30 &&
+    data[0] === 82 &&
+    data[1] === 73 &&
+    data[2] === 70 &&
+    data[3] === 70 &&
+    data[8] === 87 &&
+    data[9] === 69 &&
+    data[10] === 66 &&
+    data[11] === 80
+  ) {
     const chunk = String.fromCharCode(data[12], data[13], data[14], data[15]);
     if (chunk === "VP8X") {
       width = 1 + data[24] + (data[25] << 8) + (data[26] << 16);
       height = 1 + data[27] + (data[28] << 8) + (data[29] << 16);
-    } else if (chunk === "VP8 " && data[23] === 157 && data[24] === 1 && data[25] === 42) {
+    } else if (
+      chunk === "VP8 " &&
+      data[23] === 157 &&
+      data[24] === 1 &&
+      data[25] === 42
+    ) {
       width = (data[26] | (data[27] << 8)) & 0x3fff;
       height = (data[28] | (data[29] << 8)) & 0x3fff;
     } else if (chunk === "VP8L" && data[20] === 47) {
       width = 1 + data[21] + ((data[22] & 0x3f) << 8);
-      height = 1 + ((data[22] & 0xc0) >> 6) + (data[23] << 2) + ((data[24] & 0x0f) << 10);
+      height =
+        1 +
+        ((data[22] & 0xc0) >> 6) +
+        (data[23] << 2) +
+        ((data[24] & 0x0f) << 10);
     }
   }
   if (
@@ -105,6 +128,8 @@ export function validateComicImage(data: Uint8Array) {
     height > 30000 ||
     width * height > HARD_SOURCE_PIXELS
   )
-    throw Error("Página inválida ou com dimensões acima do limite seguro de 50 megapixels.");
+    throw Error(
+      "Página inválida ou com dimensões acima do limite seguro de 50 megapixels.",
+    );
   return { width, height };
 }

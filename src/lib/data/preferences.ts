@@ -4,6 +4,10 @@ import {
   type ReaderPreferences,
 } from "@/lib/reader-preferences";
 import { throwOnError } from "./errors";
+import {
+  publishAppPreferences,
+  type AppPreferences,
+} from "@/lib/app-experience";
 
 const queues = new Map<string, Promise<ReaderPreferences>>();
 type IdentityPatch = Partial<
@@ -13,7 +17,7 @@ type IdentityPatch = Partial<
 /** Preserve existing settings using the profile table and serialize this client's edits. */
 export async function patchProfileSettings(
   ownerId: string,
-  settings: Partial<ReaderPreferences>,
+  settings: Partial<ReaderPreferences & AppPreferences>,
   identity: IdentityPatch = {},
 ) {
   const snapshot = { ...settings };
@@ -44,6 +48,7 @@ export async function patchProfileSettings(
         "Não foi possível salvar suas preferências. Tente novamente.",
       );
       if (!saved) throw new Error("O salvamento do perfil não foi confirmado.");
+      publishAppPreferences(ownerId, saved.preferences);
       return normalizeReaderPreferences(saved.preferences);
     });
   queues.set(ownerId, current);

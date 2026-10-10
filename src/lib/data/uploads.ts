@@ -1,8 +1,8 @@
 import { validateStorageUpload } from "@/lib/upload-validation";
-import { Upload } from "tus-js-client";
 import { BUCKET, supabase } from "@/lib/supabase";
 import type { Book, Series } from "@/lib/types";
 import { DataError, throwOnError, toDataError } from "./errors";
+import { prepareCoverImage } from "@/lib/cover-image";
 
 export type StorageBucket = "novels" | "covers" | "profiles";
 type UploadOptions = {
@@ -94,6 +94,9 @@ async function uploadResumable(
     );
   if (!session)
     throw new DataError("Sua sessão expirou. Entre novamente.", "session");
+  const { Upload } = await import("tus-js-client");
+  if (signal?.aborted)
+    throw new DOMException("Upload cancelado.", "AbortError");
   const endpoint = `${process.env.NEXT_PUBLIC_SUPABASE_URL!.replace(/\/$/, "")}/storage/v1/upload/resumable`;
   await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -104,6 +107,21 @@ async function uploadResumable(
       chunkSize: 6 * 1024 * 1024,
       uploadDataDuringCreation: true,
       removeFingerprintOnSuccess: true,
+      // The same file can be sent to different works/accounts. Never resume
+      // a transport whose metadata belongs to another destination.
+      fingerprint: () =>
+        Promise.resolve(
+          JSON.stringify([
+            "nook-tus-v1",
+            endpoint,
+            BUCKET,
+            path,
+            file.name,
+            file.type,
+            file.size,
+            file.lastModified,
+          ]),
+        ),
       metadata: {
         bucketName: BUCKET,
         objectName: path,
@@ -124,11 +142,17 @@ async function uploadResumable(
     const cancel = () => {
       if (settled) return;
       settled = true;
-      void upload
-        .abort(true)
-        .finally(() =>
-          reject(new DOMException("Upload cancelado.", "AbortError")),
-        );
+      signal?.removeEventListener("abort", cancel);
+      void upload.abort(true).then(
+        () => reject(new DOMException("Upload cancelado.", "AbortError")),
+        () =>
+          reject(
+            new DOMException(
+              "Upload cancelado. A limpeza do envio temporário não foi confirmada.",
+              "AbortError",
+            ),
+          ),
+      );
     };
     signal?.addEventListener("abort", cancel, { once: true });
     void upload
@@ -150,6 +174,7 @@ export async function uploadStorageObject(
   options: UploadOptions = {},
 ) {
   await validateStorageUpload(file, bucket);
+  if (bucket === "covers") file = await prepareCoverImage(file);
   try {
     if (options.resumable) {
       if (bucket !== BUCKET)
@@ -174,7 +199,11 @@ export async function uploadStorageObject(
     if (error) throw toDataError(error, "Não foi possível enviar o arquivo.");
     options.onProgress?.(100);
   } catch (cause) {
-    await cleanupObject(bucket, path, cause);
+    // A rejected/ambiguous upload does not prove ownership of this object.
+    // In particular, a 409 can refer to a valid file from an earlier attempt.
+    // TUS cancellation terminates its own temporary resource above.
+    if (cause instanceof DOMException && cause.name === "AbortError")
+      throw cause;
     throw toDataError(cause, "Não foi possível enviar o arquivo.");
   }
 }
@@ -401,9 +430,17 @@ export async function deleteSeriesAndMedia(
   let failedCover = false;
   if (series.cover_path) {
     try {
-      failedCover = Boolean(
-        (await api.storage.from("covers").remove([series.cover_path])).error,
-      );
+      const remaining = await api
+        .from("series")
+        .select("id")
+        .eq("cover_path", series.cover_path)
+        .limit(1)
+        .maybeSingle();
+      if (remaining.error) throw remaining.error;
+      if (!remaining.data)
+        failedCover = Boolean(
+          (await api.storage.from("covers").remove([series.cover_path])).error,
+        );
     } catch {
       failedCover = true;
     }

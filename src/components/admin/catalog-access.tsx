@@ -74,7 +74,7 @@ export function CatalogAccess({
       });
       setMessage(
         visible
-          ? "Obra liberada aos convidados."
+          ? "Obra publicada para os leitores."
           : "Obra restrita à administração.",
       );
       setConfirmRelease(false);
@@ -110,9 +110,7 @@ export function CatalogAccess({
             {work && (
               <p className="publication-state">
                 <span className="visibility-badge">
-                  {work.beta_visible
-                    ? "Liberada aos convidados"
-                    : "Restrita à administração"}
+                  {work.beta_visible ? "Publicada" : "Restrita à administração"}
                 </span>{" "}
                 <Link href={`/series/${work.id}`}>Prévia da leitura →</Link>
               </p>
@@ -148,7 +146,11 @@ export function CatalogAccess({
             <p role="status">{message}</p>
           </div>
           <h3>Denúncias recentes (até 50)</h3>
-          <button type="button" onClick={() => setAttempt((n) => n + 1)}>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => setAttempt((n) => n + 1)}
+          >
             Atualizar denúncias
           </button>
           {!reports.length && (
@@ -194,8 +196,8 @@ export function CatalogAccess({
           {confirmRelease && work && (
             <ConfirmDialog
               title={`Liberar ${work.title}?`}
-              message="A obra e seus arquivos ficarão acessíveis aos convidados ativos. Confirme que a autorização informada permite esse compartilhamento."
-              confirmLabel="Liberar aos convidados"
+              message="A obra e seus arquivos ficarão acessíveis aos leitores. Confirme que a autorização informada permite esse compartilhamento."
+              confirmLabel="Liberar aos leitores"
               busy={busy}
               onCancel={() => setConfirmRelease(false)}
               onConfirm={() => void setVisibility(true)}

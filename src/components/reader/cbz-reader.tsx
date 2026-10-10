@@ -10,6 +10,7 @@ import { supabase, BUCKET } from "@/lib/supabase";
 import { getReaderNavigationNeighbors } from "@/lib/data/reader-navigation";
 import {
   saveReadingProgress,
+  loadReadingProgress,
   ProgressConflictError,
 } from "@/lib/data/progress";
 import { patchProfileSettings } from "@/lib/data/preferences";
@@ -19,6 +20,8 @@ import { CBZ_LIMITS, calculateReadingProgress } from "@/lib/media-rules";
 import { toDataError } from "@/lib/data/errors";
 import { mediaHref } from "@/lib/catalog";
 import type { Book } from "@/lib/types";
+import { useProgressPersistence } from "@/hooks/use-progress-persistence";
+import { consumeReaderRestart } from "@/lib/reader-restart";
 
 type Position = { page_number: number; scroll_ratio: number };
 type Neighbor = Pick<Book, "id" | "media_type">;
@@ -49,8 +52,8 @@ export function CbzReader({ id, user }: { id: string; user: User }) {
   const active = useRef(0);
   const restore = useRef<Position | null>(null);
   const restoring = useRef(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSaved = useRef({ page: -1, ratio: -1 });
+  const restart = useRef<boolean | null>(null);
 
   const position = useCallback(() => {
     const index = active.current;
@@ -61,7 +64,10 @@ export function CbzReader({ id, user }: { id: string; user: User }) {
         comicMode === "page"
           ? 0
           : rect
-            ? Math.min(1, Math.max(0, -rect.top / Math.max(1, rect.height)))
+            ? Math.min(
+                1,
+                Math.max(0, (76 - rect.top) / Math.max(1, rect.height)),
+              )
             : 0,
     };
   }, [comicMode]);
@@ -83,17 +89,28 @@ export function CbzReader({ id, user }: { id: string; user: User }) {
         Math.abs(current.ratio - lastSaved.current.ratio) < 0.05
       )
         return true;
-      lastSaved.current = current;
       setStatus("Salvando…");
       try {
-        await saveReadingProgress(user.id, id, {
+        const result = await saveReadingProgress(user.id, id, {
           page_number: current.page + 1,
           scroll_ratio: current.ratio,
           reading_mode: "page",
           page_count: count,
-          completed: atEnd,
+          completed:
+            atEnd ||
+            calculateReadingProgress({
+              mediaType: "cbz",
+              pageNumber: current.page + 1,
+              totalPages: count,
+              scrollRatio: current.ratio,
+            }).completed,
         });
-        setStatus("Progresso salvo");
+        lastSaved.current = current;
+        setStatus(
+          result.synced
+            ? "Progresso salvo"
+            : "Salvo neste dispositivo · sincronização pendente",
+        );
         setSaveError("");
         setConflict(false);
         return true;
@@ -111,6 +128,7 @@ export function CbzReader({ id, user }: { id: string; user: User }) {
     },
     [comicMode, count, id, position, user.id],
   );
+  const scheduleSave = useProgressPersistence(() => save(true), count > 0);
 
   const requestNear = useCallback(
     (index: number) => {
@@ -143,6 +161,7 @@ export function CbzReader({ id, user }: { id: string; user: User }) {
     const pending = requested.current;
     async function load() {
       try {
+        if (restart.current === null) restart.current = consumeReaderRestart();
         const api = supabase();
         const [b, p, profile] = await Promise.all([
           api
@@ -152,19 +171,15 @@ export function CbzReader({ id, user }: { id: string; user: User }) {
             )
             .eq("id", id)
             .single(),
-          api
-            .from("reading_progress")
-            .select("page_number,scroll_ratio,updated_at")
-            .eq("owner_id", user.id)
-            .eq("book_id", id)
-            .maybeSingle(),
+          loadReadingProgress(user.id, id),
           api
             .from("profiles")
             .select("preferences")
             .eq("id", user.id)
             .maybeSingle(),
         ]);
-        if (b.error || !b.data || p.error)
+        if (!live) return;
+        if (b.error || !b.data)
           throw new Error("Capítulo indisponível ou sem acesso.");
         const item = b.data as Book;
         if (item.media_type !== "cbz") {
@@ -183,7 +198,7 @@ export function CbzReader({ id, user }: { id: string; user: User }) {
             "Não foi possível carregar o modo de leitura da conta.",
           );
         setBook(item);
-        restore.current = p.data as Position | null;
+        restore.current = restart.current ? null : (p as Position | null);
         restoring.current = Boolean(restore.current);
         void getReaderNavigationNeighbors(item)
           .then(async (neighbors) => {
@@ -289,7 +304,6 @@ export function CbzReader({ id, user }: { id: string; user: User }) {
       worker.current = null;
       pending.clear();
       Object.values(ownedUrls).forEach(URL.revokeObjectURL);
-      if (timer.current) clearTimeout(timer.current);
     };
   }, [id, router, user.id]);
 
@@ -306,7 +320,7 @@ export function CbzReader({ id, user }: { id: string; user: User }) {
           else visible.delete(index);
         }
         if (restoring.current || !visible.size) return;
-        const center = window.innerHeight * 0.4;
+        const center = 76;
         const inViewport = [...visible].filter((index) => {
           const rect = pages.current[index]?.getBoundingClientRect();
           return rect && rect.bottom > 76 && rect.top < window.innerHeight;
@@ -343,24 +357,38 @@ export function CbzReader({ id, user }: { id: string; user: User }) {
 
   useEffect(() => {
     if (!count) return;
+    let frame = 0;
     const onScroll = () => {
       if (restoring.current) return;
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => void save(), 1200);
-    };
-    const persist = () => {
-      if (document.visibilityState === "hidden") void save(true);
+      scheduleSave();
+      if (frame || comicMode === "page") return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        // Binary search stays cheap even for hundreds of very tall pages.
+        let low = 0,
+          high = count - 1;
+        const anchor = 76;
+        while (low < high) {
+          const mid = Math.floor((low + high) / 2);
+          if (
+            (pages.current[mid]?.getBoundingClientRect().bottom || 0) <= anchor
+          )
+            low = mid + 1;
+          else high = mid;
+        }
+        if (active.current !== low) {
+          active.current = low;
+          setPage(low);
+          requestNear(low);
+        }
+      });
     };
     window.addEventListener("scroll", onScroll, { passive: true });
-    document.addEventListener("visibilitychange", persist);
-    window.addEventListener("pagehide", persist);
     return () => {
       window.removeEventListener("scroll", onScroll);
-      document.removeEventListener("visibilitychange", persist);
-      window.removeEventListener("pagehide", persist);
-      if (timer.current) clearTimeout(timer.current);
+      cancelAnimationFrame(frame);
     };
-  }, [count, requestNear, save]);
+  }, [comicMode, count, requestNear, scheduleSave]);
 
   function scrollToPage(
     index: number,
@@ -385,6 +413,8 @@ export function CbzReader({ id, user }: { id: string; user: User }) {
   function goTo(index: number) {
     const target = Math.max(0, Math.min(count - 1, index));
     active.current = target;
+    restore.current = { page_number: target + 1, scroll_ratio: 0 };
+    restoring.current = !urls.current[target];
     setPage(target);
     requestNear(target);
     requestAnimationFrame(() =>
@@ -397,8 +427,7 @@ export function CbzReader({ id, user }: { id: string; user: User }) {
           : "smooth",
       ),
     );
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => void save(true), 1400);
+    scheduleSave();
   }
 
   async function navigate(href: string) {
@@ -448,6 +477,12 @@ export function CbzReader({ id, user }: { id: string; user: User }) {
           ← Voltar à obra
         </Link>
         <h1>{book?.title || "Sua próxima história"}</h1>
+        {!count && !error && (
+          <div className="comic-loading" aria-busy="true">
+            <span className="reader-loading-mark" />
+            <p>Abrindo capítulo…</p>
+          </div>
+        )}
         {error && (
           <p className="error" role="alert">
             {error}{" "}
@@ -563,7 +598,13 @@ export function CbzReader({ id, user }: { id: string; user: User }) {
                     <img
                       src={images[index]}
                       alt={`Página ${index + 1}`}
-                      loading="lazy"
+                      loading={Math.abs(index - page) <= 2 ? "eager" : "lazy"}
+                      decoding="async"
+                      onError={() =>
+                        setError(
+                          `Não foi possível carregar a página ${index + 1}. Tente novamente.`,
+                        )
+                      }
                       onLoad={(event) => {
                         const image = event.currentTarget;
                         image.parentElement?.style.setProperty(
@@ -582,6 +623,7 @@ export function CbzReader({ id, user }: { id: string; user: User }) {
                                 behavior: "instant",
                               });
                             restoring.current = false;
+                            scheduleSave();
                           });
                       }}
                     />

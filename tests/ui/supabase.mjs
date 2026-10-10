@@ -51,6 +51,13 @@ const history = series.slice(0, 3).map((work, i) => ({
   updated_at: "2026-01-01",
   books: { ...books[i], series: work, volumes: null },
 }));
+const completedBook = { ...books[3], id: "book-25", series_id: series[25].id };
+history.push({
+  ...history[0],
+  book_id: completedBook.id,
+  completed: true,
+  books: { ...completedBook, series: series[25], volumes: null },
+});
 let failOnce = params.get("state") === "error";
 const favorites = new Set();
 const profile = {
@@ -68,7 +75,16 @@ const profile = {
 };
 const calls = [];
 let saveFailure = params.get("state") === "save-error";
-window.__nookTest = { calls, profile, favorites };
+const authListeners = new Set();
+window.__nookTest = {
+  calls,
+  profile,
+  favorites,
+  history,
+  emitAuth: (event, session) => {
+    for (const listener of authListeners) listener(event, session);
+  },
+};
 class Query {
   constructor(table) {
     this.table = table;
@@ -114,14 +130,16 @@ class Query {
   upsert(row) {
     if (this.table === "favorites") favorites.add(row.series_id);
     this.write = true;
+    this.upsertRow = row;
     return this;
   }
   delete() {
     this.write = true;
     return this;
   }
-  update() {
+  update(row) {
     this.write = true;
+    this.updateRow = row;
     return this;
   }
   insert(row) {
@@ -134,6 +152,28 @@ class Query {
   }
   async then(resolve, reject) {
     try {
+      if (this.table === "comments" && params.get("state") === "comment-race") {
+        const index = (window.__nookTest.commentReads || 0) + 1;
+        window.__nookTest.commentReads = index;
+        if (index === 1)
+          await new Promise((done) => {
+            window.__nookTest.releaseCommentRead = done;
+          });
+        return resolve({
+          data: [
+            {
+              id: `comment-${index}`,
+              owner_id: user.id,
+              series_id: "work-0",
+              body: `Conversa carregada ${index}`,
+              spoiler: false,
+              parent_id: null,
+              created_at: "2026-01-01T00:00:00Z",
+            },
+          ],
+          error: null,
+        });
+      }
       if (params.get("state") === "loading")
         await new Promise((r) => setTimeout(r, 1200));
       if (this.table === "series" && failOnce) {
@@ -154,9 +194,16 @@ class Query {
       if (this.table === "beta_access")
         data = [{ role: "admin", revoked: false, expires_at: "infinity" }];
       if (this.table === "profiles") data = [profile];
+      if (this.table === "books" && this.columns?.startsWith("id,series_id"))
+        data = [
+          ...books
+            .slice(0, 3)
+            .map((book, i) => ({ ...book, series_id: series[i].id })),
+          completedBook,
+        ];
       if (this.created) data = [this.created];
       if (this.table === "reading_progress")
-        data = this.columns.includes("books!inner")
+        data = this.columns?.includes("books!inner")
           ? history
           : this.one
             ? []
@@ -173,6 +220,24 @@ class Query {
         data = data.filter((row) => favorites.has(row.id));
       if (this.window) data = data.slice(this.window[0], this.window[1] + 1);
       if (this.write) {
+        if (this.table === "profiles") {
+          calls.push({ table: this.table, update: this.updateRow });
+          Object.assign(profile, this.updateRow);
+          return resolve({ data: this.one ? profile : [profile], error: null });
+        }
+        if (this.table === "reading_progress" && this.upsertRow) {
+          calls.push({ table: this.table, upsert: this.upsertRow });
+          if (saveFailure) {
+            saveFailure = false;
+            return resolve({
+              data: null,
+              error: {
+                message: "network",
+                code: params.has("conflict") ? "40001" : "FETCH",
+              },
+            });
+          }
+        }
         if (this.table === "favorites")
           for (const [key, value] of this.filters)
             if (key === "series_id") favorites.delete(value);
@@ -233,10 +298,22 @@ const api = {
             args.reading_state === "all" ||
             s.reading_state === args.reading_state) &&
           (!args.search_term ||
-            s.title.toLowerCase().includes(args.search_term.toLowerCase()) ||
+            s.title
+              .normalize("NFD")
+              .replace(/[\u0300-\u036f]/g, "")
+              .toLowerCase()
+              .includes(args.search_term.toLowerCase()) ||
             (name === "admin_library_page" &&
               s.id === "work-0" &&
-              args.search_term.includes("capítulo"))),
+              /cap[ií]tulo\s+[1-4]/.test(args.search_term)) ||
+            (name === "browse_catalog" &&
+              history.some(
+                (entry) =>
+                  entry.books.series.id === s.id &&
+                  `capitulo ${entry.books.chapter_number}`.includes(
+                    args.search_term,
+                  ),
+              ))),
       );
       if (args.sort_by === "title" || name === "admin_library_page")
         rows.sort((a, b) => a.title.localeCompare(b.title));
@@ -281,19 +358,50 @@ const api = {
     return { data: [], error: null };
   },
   auth: {
-    getUser: async () => ({
-      data: {
-        user:
-          params.get("screen") === "auth" || !params.get("screen")
-            ? null
-            : user,
-      },
-      error: null,
-    }),
+    signUp: async (credentials) => {
+      calls.push({ auth: "signup", credentials });
+      return { data: { session: null }, error: null };
+    },
+    resetPasswordForEmail: async (email, options) => {
+      calls.push({ auth: "recover", email, options });
+      return { error: null };
+    },
+    resend: async (options) => {
+      calls.push({ auth: "resend", options });
+      return { error: null };
+    },
+    updateUser: async (options) => {
+      calls.push({ auth: "update", options });
+      return { data: { user }, error: null };
+    },
+    getUser: async () =>
+      params.get("state") === "auth-race"
+        ? new Promise((resolve) => {
+            window.__nookTest.resolveUser = () =>
+              resolve({ data: { user }, error: null });
+          })
+        : {
+            data: {
+              user:
+                params.get("screen") === "auth" || !params.get("screen")
+                  ? null
+                  : user,
+            },
+            error: null,
+          },
     getSession: async () => ({ data: { session: { user } }, error: null }),
-    onAuthStateChange: () => ({
-      data: { listener: null, subscription: { unsubscribe() {} } },
-    }),
+    onAuthStateChange: (listener) => {
+      authListeners.add(listener);
+      return {
+        data: {
+          subscription: {
+            unsubscribe() {
+              authListeners.delete(listener);
+            },
+          },
+        },
+      };
+    },
     signOut: async () => {},
   },
   storage: {
@@ -302,7 +410,7 @@ const api = {
         data: {
           signedUrl:
             bucket === "novels"
-              ? "/chapter.cbz"
+              ? `/chapter.cbz${params.get("archive") === "long" ? "?long=1" : ""}`
               : path === "broken"
                 ? "/missing.png"
                 : "/cover.png",

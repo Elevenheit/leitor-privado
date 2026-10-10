@@ -314,7 +314,7 @@ function SeriesDetail({ user, id }: { user: User; id: string }) {
           <div className="series-hero-copy">
             <span className="eyebrow">
               Administração ·{" "}
-              {series.beta_visible ? "Liberada aos convidados" : "Restrita"}
+              {series.beta_visible ? "Publicada" : "Restrita"}
             </span>
             <h1>{series.title}</h1>
             {series.description && <p>{series.description}</p>}

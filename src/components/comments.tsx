@@ -1,8 +1,14 @@
 /* eslint-disable @next/next/no-img-element -- Private signed avatars avoid proxying through Render. */
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { deleteComment, listComments, reportComment, saveComment } from "@/lib/data/comments";
+import { loadLibraryAccess, hasLibraryAccess } from "@/lib/data/access";
+import {
+  deleteComment,
+  listComments,
+  reportComment,
+  saveComment,
+} from "@/lib/data/comments";
 import { toDataError } from "@/lib/data/errors";
 type Comment = {
   id: string;
@@ -29,22 +35,51 @@ export function Comments({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [admin, setAdmin] = useState(false);
+  const requests = useRef(0);
+  const mounted = useRef(false);
   const load = useCallback(async () => {
+    if (!mounted.current) return;
+    const generation = ++requests.current;
     try {
       const comments = await listComments(seriesId, page);
-      const identities = await supabase().from("profile_identities").select("id,nickname,avatar,avatar_path").in("id", [...new Set(comments.map((comment) => comment.owner_id))]);
+      if (generation !== requests.current) return;
+      const identities = await supabase()
+        .from("profile_identities")
+        .select("id,nickname,avatar,avatar_path")
+        .in("id", [...new Set(comments.map((comment) => comment.owner_id))]);
       if (identities.error) throw identities.error;
-      const profiles = await Promise.all((identities.data || []).map(async (profile) => ({
-        ...profile,
-        avatar_url: profile.avatar_path ? (await supabase().storage.from("profiles").createSignedUrl(profile.avatar_path, 3600)).data?.signedUrl : undefined,
-      })));
-      setRows(comments.map((comment) => ({ ...comment, profiles: profiles.find((profile) => profile.id === comment.owner_id) || null })));
+      const profiles = await Promise.all(
+        (identities.data || []).map(async (profile) => ({
+          ...profile,
+          avatar_url: profile.avatar_path
+            ? (
+                await supabase()
+                  .storage.from("profiles")
+                  .createSignedUrl(profile.avatar_path, 3600)
+              ).data?.signedUrl
+            : undefined,
+        })),
+      );
+      if (generation !== requests.current) return;
+      setRows(
+        comments.map((comment) => ({
+          ...comment,
+          profiles:
+            profiles.find((profile) => profile.id === comment.owner_id) || null,
+        })),
+      );
       setError("");
     } catch (cause) {
-      setError(toDataError(cause, "Conversation could not be loaded.").message);
+      if (generation === requests.current)
+        setError(
+          toDataError(cause, "A conversa não carregou. Tente atualizar.")
+            .message,
+        );
     }
   }, [seriesId, page]);
   useEffect(() => {
+    mounted.current = true;
+    const activeRequests = requests;
     let live = true;
     const timer = setTimeout(() => void load(), 0);
     async function checkAdmin() {
@@ -53,18 +88,8 @@ export function Comments({
         const { data: session } = await api.auth.getSession();
         const currentUserId = session.session?.user.id;
         if (!currentUserId) return;
-        const { data: access } = await api
-          .from("beta_access")
-          .select("role, expires_at, revoked")
-          .eq("user_id", currentUserId)
-          .maybeSingle();
-        const expiry = access?.expires_at;
-        const expiryTime = expiry ? Date.parse(expiry) : Number.NaN;
-        const active =
-          access?.revoked === false &&
-          (expiry === "infinity" ||
-            (Number.isFinite(expiryTime) && expiryTime > Date.now()));
-        if (live) setAdmin(active && access?.role === "admin");
+        const access = await loadLibraryAccess(currentUserId);
+        if (live) setAdmin(hasLibraryAccess(access, true));
       } catch {
         if (live) setAdmin(false);
       }
@@ -72,6 +97,8 @@ export function Comments({
     void checkAdmin();
     return () => {
       live = false;
+      mounted.current = false;
+      activeRequests.current++;
       clearTimeout(timer);
     };
   }, [load]);
@@ -81,21 +108,39 @@ export function Comments({
     setBusy(true);
     setError("");
     try {
-      await saveComment({ series_id: seriesId, owner_id: userId, body: body.trim(), spoiler, parent_id: reply }, editing || undefined);
+      await saveComment(
+        {
+          series_id: seriesId,
+          owner_id: userId,
+          body: body.trim(),
+          spoiler,
+          parent_id: reply,
+        },
+        editing || undefined,
+      );
       setBody("");
       setEditing(null);
       setReply(null);
       await load();
     } catch (cause) {
-      setError(toDataError(cause, "Could not publish comment. Wait 15 seconds and retry.").message);
+      setError(
+        toDataError(
+          cause,
+          "Não foi possível publicar o comentário. Aguarde 15 segundos e tente novamente.",
+        ).message,
+      );
     } finally {
       setBusy(false);
     }
   }
   async function remove(id: string) {
     if (!confirm("Excluir este comentario?")) return;
-    try { await deleteComment(id); await load(); }
-    catch (cause) { setError(toDataError(cause, "Nao foi possivel excluir.").message); }
+    try {
+      await deleteComment(id);
+      await load();
+    } catch (cause) {
+      setError(toDataError(cause, "Nao foi possivel excluir.").message);
+    }
   }
   async function report(id: string) {
     const reason = prompt("Por que deseja denunciar? (3 a 500 caracteres)");
@@ -104,7 +149,9 @@ export function Comments({
       await reportComment(id, userId, reason.trim().slice(0, 500));
       setError("Denuncia enviada para a administracao.");
     } catch (cause) {
-      setError(toDataError(cause, "Denuncia ja enviada ou falha de conexao.").message);
+      setError(
+        toDataError(cause, "Denuncia ja enviada ou falha de conexao.").message,
+      );
     }
   }
   return (
@@ -116,6 +163,7 @@ export function Comments({
           <p>
             {editing ? "Editando comentário" : "Respondendo ao comentário"}{" "}
             <button
+              className="ghost-button"
               type="button"
               onClick={() => {
                 setReply(null);
@@ -136,7 +184,7 @@ export function Comments({
             onChange={(e) => setBody(e.target.value)}
           />
         </label>
-        <label>
+        <label className="comment-spoiler-choice">
           <input
             type="checkbox"
             checked={spoiler}

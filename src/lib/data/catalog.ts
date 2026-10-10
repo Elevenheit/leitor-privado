@@ -1,9 +1,13 @@
-import { catalogSearch, type Format } from "@/lib/catalog";
+import { catalogSearch, normalizeSearchText, type Format } from "@/lib/catalog";
 import { supabase } from "@/lib/supabase";
 import type { Book, Series, Volume, ReadingProgress } from "@/lib/types";
 import { throwOnError } from "./errors";
 import { readRows } from "./read-rows";
 import { sortBooks, sortVolumes } from "@/lib/reader-navigation";
+
+import { mergeAccessibleProgress } from "@/lib/local-progress";
+import { readingActivity } from "@/lib/reading-activity";
+import { listLocalProgress } from "@/lib/local-progress";
 
 export async function listCatalogSeries(ownerId: string) {
   const result = await supabase()
@@ -84,109 +88,50 @@ export async function listCatalogPage(options: {
   readingState?: ReadingState;
   order?: CatalogOrder;
 }) {
-  const api = supabase();
-  const [series, books, progress, favorites] = await Promise.all([
-    readRows<Series>(
-      () => api.from("series").select("*").order("id"),
-      "Não foi possível carregar o catálogo.",
-    ),
-    readRows<Pick<Book, "id" | "series_id">>(
-      () => api.from("books").select("id,series_id").order("id"),
-      "Não foi possível carregar os capítulos.",
-    ),
-    readRows<Pick<ReadingProgress, "book_id" | "completed" | "updated_at">>(
-      () =>
-        api
-          .from("reading_progress")
-          .select("book_id,completed,updated_at")
-          .eq("owner_id", options.ownerId)
-          .order("book_id"),
-      "Não foi possível carregar seu progresso.",
-    ),
-    readRows<{ series_id: string }>(
-      () =>
-        api
-          .from("favorites")
-          .select("series_id")
-          .eq("owner_id", options.ownerId)
-          .order("series_id"),
-      "Não foi possível carregar favoritos.",
-    ),
-  ]);
-  const favoriteIds = new Set(favorites.map((item) => item.series_id));
-  const positions = new Map(progress.map((item) => [item.book_id, item]));
-  const summaries = new Map<
-    string,
-    {
-      chapters: number;
-      completed: number;
-      started: number;
-      last: string | null;
-    }
-  >();
-  for (const book of books) {
-    if (!book.series_id) continue;
-    const stats = summaries.get(book.series_id) || {
-      chapters: 0,
-      completed: 0,
-      started: 0,
-      last: null,
-    };
-    const position = positions.get(book.id);
-    stats.chapters++;
-    if (position) {
-      stats.started++;
-      if (position.completed) stats.completed++;
-      if (!stats.last || position.updated_at > stats.last)
-        stats.last = position.updated_at;
-    }
-    summaries.set(book.series_id, stats);
-  }
-  const term = catalogSearch(options.search || "").toLocaleLowerCase();
-  const filtered: CatalogSeries[] = series
-    .map((item) => {
-      const stats = summaries.get(item.id);
-      const state =
-        stats?.chapters && stats.completed === stats.chapters
-          ? "completed"
-          : stats?.started
-            ? "reading"
-            : "unread";
-      return {
-        ...item,
-        chapter_count: stats?.chapters || 0,
-        completed_count: stats?.completed || 0,
-        reading_state: state as CatalogSeries["reading_state"],
-        last_read_at: stats?.last || null,
-        is_favorite: favoriteIds.has(item.id),
-      };
-    })
-    .filter(
-      (item) =>
-        (!options.format || item.format === options.format) &&
-        (!term || item.title.toLocaleLowerCase().includes(term)) &&
-        (!options.favoritesOnly || item.is_favorite) &&
-        (!options.readingState ||
-          options.readingState === "all" ||
-          item.reading_state === options.readingState),
+  const pending = listLocalProgress(options.ownerId)
+    .filter((position) => position.pending)
+    .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+    .slice(0, 512)
+    .map(
+      ({
+        book_id,
+        page_number,
+        scroll_ratio,
+        page_count,
+        line_index,
+        completed,
+        updated_at,
+      }) => ({
+        book_id,
+        page_number,
+        scroll_ratio,
+        page_count,
+        line_index,
+        completed,
+        updated_at,
+      }),
     );
-  filtered.sort(
-    (a, b) =>
-      (options.order === "title"
-        ? a.title.toLocaleLowerCase().localeCompare(b.title.toLocaleLowerCase())
-        : 0) ||
-      (options.order === "last-read"
-        ? (b.last_read_at || "").localeCompare(a.last_read_at || "")
-        : 0) ||
-      b.created_at.localeCompare(a.created_at) ||
-      a.id.localeCompare(b.id),
-  );
-  const offset = Math.max(0, options.page) * 24;
-  const page = {
-    items: filtered.slice(offset, offset + 24),
-    hasMore: filtered.length > offset + 24,
-    totalCount: filtered.length,
-  };
+  const result = await supabase().rpc("browse_catalog", {
+    page_index: Number.isFinite(options.page)
+      ? Math.max(0, Math.floor(options.page))
+      : 0,
+    filter_format: options.format ?? null,
+    favorites_only: options.favoritesOnly ?? false,
+    search_term: normalizeSearchText(catalogSearch(options.search || "")),
+    reading_state: options.readingState ?? "all",
+    sort_by: options.order ?? "recent",
+    pending_positions: pending,
+  });
+  const page = throwOnError(
+    result,
+    "Não foi possível carregar o catálogo. Tente novamente ou avise a administração.",
+  ) as {
+    items: CatalogSeries[];
+    totalCount: number;
+    hasMore: boolean;
+  } | null;
+  if (!page || !Array.isArray(page.items))
+    throw new Error("O catálogo não retornou uma página válida.");
   return {
     ...page,
     favoriteIds: page.items
@@ -244,10 +189,16 @@ export async function getWorkPage(
   const volumes = sortVolumes(allVolumes);
   const ordered = sortBooks(allBooks, volumes);
   const ids = new Set(ordered.map((book) => book.id));
-  const progress = allProgress.filter((item) => ids.has(item.book_id));
-  const latest = [...progress].sort((a, b) =>
+  const progress = mergeAccessibleProgress(ownerId, allProgress, ids);
+  const recentProgress = [...progress].sort((a, b) =>
     b.updated_at.localeCompare(a.updated_at),
-  )[0];
+  );
+  const booksById = new Map(ordered.map((book) => [book.id, book]));
+  const latest =
+    recentProgress.find((position) => {
+      const book = booksById.get(position.book_id);
+      return book && readingActivity(position, book).inProgress;
+    }) || recentProgress[0];
   const lastRead = latest
     ? ordered.find((book) => book.id === latest.book_id) || null
     : null;

@@ -42,12 +42,16 @@ for (const path of [
   "supabase/migrations/010_comment_report_rate_limit.sql",
   "supabase/migrations/011_profile_storage_privacy.sql",
   "supabase/migrations/012_reading_only.sql",
+  "supabase/migrations/013_progress_order.sql",
+  "supabase/migrations/014_open_registration.sql",
+  "supabase/migrations/015_reader_anchors.sql",
+  "supabase/migrations/016_catalog_pagination.sql",
 ])
   await db.exec(readFileSync(path, "utf8"));
 await db.exec(`grant usage on schema public,auth,storage to authenticated;
 grant select,insert,update,delete on storage.objects to authenticated;
 grant execute on function auth.uid() to authenticated;
-insert into beta_access(user_id,role,expires_at) values('${admin}','admin',now()+interval '365 days');
+update beta_access set role='admin' where user_id='${admin}';
 insert into beta_invites(email,expires_at) values('leitor@example.test',now()+interval '7 days'),('convidado@example.test',now()+interval '7 days');
 insert into auth.users values('${reader}','leitor@example.test');
 update profiles set nickname='bibliotecario',display_name='Meu canto de leitura',bio='Uma biblioteca de demonstração para explorar com calma.',preferences='{"fontSize":22,"lineHeight":1.85,"textWidth":760}' where id='${admin}';
@@ -72,7 +76,7 @@ const names = [
   "A casa de papel",
   "Entre rios e montanhas",
 ];
-const pdf = originalPdf(),
+const pdf = originalPdf({ outline: true }),
   cbz = readFileSync("tests/fixtures/nook-original.cbz");
 async function seedObject(bucket, path, bytes, type) {
   objects.set(`${bucket}/${path}`, { bytes, type });
@@ -212,6 +216,15 @@ const functions = {
     "expected_updated_at",
   ],
   reader_navigation_neighbors: ["target_book_id"],
+  browse_catalog: [
+    "page_index",
+    "filter_format",
+    "favorites_only",
+    "search_term",
+    "reading_state",
+    "sort_by",
+    "pending_positions",
+  ],
   beta_admin: [],
   beta_member: [],
 };
@@ -603,14 +616,19 @@ const apiServer = createServer(async (req, res) => {
         let id = requestUser(req);
         if (url.pathname.startsWith("/auth/v1/")) {
           if (url.pathname.endsWith("/logout")) return send({});
+          // These acknowledge UI flows only; this local service never sends e-mail.
+          if (
+            url.pathname.endsWith("/recover") ||
+            url.pathname.endsWith("/resend")
+          )
+            return send({});
           if (url.pathname.endsWith("/signup")) {
             const email = String(body.email || "").toLowerCase();
-            if (email !== "convidado@example.test" || accounts.has(email))
+            if (!email.includes("@") || accounts.has(email))
               return send(
                 {
-                  message:
-                    "Use o convite fictício convidado@example.test uma vez nesta demonstração.",
-                  code: "signup_disabled",
+                  message: "Confira o e-mail ou use Entrar.",
+                  code: "user_already_exists",
                 },
                 400,
               );
@@ -700,7 +718,7 @@ const apiServer = createServer(async (req, res) => {
     });
 });
 
-const portal = `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nook — demonstração local</title><style>body{margin:0;background:#151412;color:#eee7dc;font:16px/1.6 system-ui}main{max-width:800px;margin:auto;padding:40px 24px}h1,h2{font-family:Georgia;font-weight:400}h1{font-size:42px}a,button{color:#d6b185}button{background:#25221e;border:1px solid #65513b;border-radius:6px;padding:14px 18px;font:inherit;cursor:pointer;margin:0 8px 12px 0}code{color:#d6b185}li{margin:9px 0}.note{padding:16px;border:1px solid #65513b;border-radius:8px}a:focus-visible,button:focus-visible{outline:2px solid #d6b185;outline-offset:4px}</style><main><h1>nook. <small style="font:14px system-ui;color:#d6b185">Demonstração local</small></h1><p>Aplicação real com dados fictícios, banco temporário e serviços simulados no computador. As alterações somem ao encerrar o processo.</p><button data-email="admin@example.test">Entrar como administração</button><button data-email="leitor@example.test">Entrar como leitor</button><p id="status" role="status"></p><h2>O que explorar</h2><ol><li><a href="/">Início</a>: leitura atual, busca, filtros, ordenação, capas ausentes/quebradas e paginação (30 obras).</li><li><a href="/series/${uuid(100)}">Obra com 105 capítulos</a>: volumes, início global, continuação e paginação.</li><li><a href="/read/${uuid(1000)}">PDF original local</a>: texto, páginas, fallback sem texto, ajustes, marcadores e retomada.</li><li><a href="/media/${uuid(1200)}">CBZ original local</a>: rolagem vertical, página individual e progresso.</li><li><a href="/profile">Perfil</a> e <a href="/list">lista</a>: preferências, identidade e favoritos por conta.</li><li><a href="/admin">Administração</a>, <a href="/admin/series/${uuid(100)}">obra administrativa</a> e <a href="/manage">gerenciador</a>: criar, editar, organizar, restringir/liberar, excluir e uploads fictícios locais.</li><li>Saia da conta e teste o cadastro usando <code>convidado@example.test</code> (convite de uso único).</li></ol><p class="note">Contas fictícias: <code>admin@example.test</code> e <code>leitor@example.test</code>. Na tela de acesso use a senha fictícia <code>nook-local-test</code>. Não use sua senha real. Uploads nesta demonstração têm limite de 20 MB e ficam apenas na memória. A senha não é validada nem armazenada; troca de senha, envio de e-mail e revogação de URLs em Supabase real não são homologados aqui.</p><p><a href="/">Abrir Nook</a> · Volte a <code>/__demo</code> para alternar contas.</p></main><script>document.querySelectorAll('[data-email]').forEach(button=>button.onclick=async()=>{try{const response=await fetch('${API}/auth/v1/token?grant_type=password',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:button.dataset.email,password:'nook-local-test'})});if(!response.ok)throw Error('Falha ao abrir a demonstração.');localStorage.setItem('sb-127-auth-token',JSON.stringify(await response.json()));location.href='/';}catch(error){document.querySelector('#status').textContent=error.message;}});</script></html>`;
+const portal = `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nook — demonstração local</title><style>body{margin:0;background:#151412;color:#eee7dc;font:16px/1.6 system-ui}main{max-width:800px;margin:auto;padding:40px 24px}h1,h2{font-family:Georgia;font-weight:400}h1{font-size:42px}a,button{color:#d6b185}button{background:#25221e;border:1px solid #65513b;border-radius:6px;padding:14px 18px;font:inherit;cursor:pointer;margin:0 8px 12px 0}code{color:#d6b185}li{margin:9px 0}.note{padding:16px;border:1px solid #65513b;border-radius:8px}a:focus-visible,button:focus-visible{outline:2px solid #d6b185;outline-offset:4px}</style><main><h1>nook. <small style="font:14px system-ui;color:#d6b185">Demonstração local</small></h1><p>Aplicação real com dados fictícios, banco temporário e serviços simulados no computador. As alterações somem ao encerrar o processo.</p><button data-email="admin@example.test">Entrar como administração</button><button data-email="leitor@example.test">Entrar como leitor</button><p id="status" role="status"></p><h2>O que explorar</h2><ol><li><a href="/">Início</a>: leitura atual, busca, filtros, ordenação, capas ausentes/quebradas e paginação (30 obras).</li><li><a href="/series/${uuid(100)}">Obra com 105 capítulos</a>: volumes, início global, continuação e paginação.</li><li><a href="/read/${uuid(1000)}">PDF original local</a>: texto, páginas, fallback sem texto, ajustes, marcadores e retomada.</li><li><a href="/media/${uuid(1200)}">CBZ original local</a>: rolagem vertical, página individual e progresso.</li><li><a href="/profile">Perfil</a> e <a href="/list">lista</a>: preferências, identidade e favoritos por conta.</li><li><a href="/admin">Administração</a>, <a href="/admin/series/${uuid(100)}">obra administrativa</a> e <a href="/manage">gerenciador</a>: criar, editar, organizar, restringir/liberar, excluir e uploads fictícios locais.</li><li>Saia da conta e teste o cadastro usando qualquer e-mail fictício novo.</li></ol><p class="note">Contas fictícias: <code>admin@example.test</code> e <code>leitor@example.test</code>. Na tela de acesso use a senha fictícia <code>nook-local-test</code>. Não use sua senha real. Uploads nesta demonstração têm limite de 20 MB e ficam apenas na memória. A senha não é validada nem armazenada; troca de senha, envio de e-mail e revogação de URLs em Supabase real não são homologados aqui.</p><p><a href="/">Abrir Nook</a> · Volte a <code>/__demo</code> para alternar contas.</p></main><script>document.querySelectorAll('[data-email]').forEach(button=>button.onclick=async()=>{try{const response=await fetch('${API}/auth/v1/token?grant_type=password',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:button.dataset.email,password:'nook-local-test'})});if(!response.ok)throw Error('Falha ao abrir a demonstração.');localStorage.setItem('sb-127-auth-token',JSON.stringify(await response.json()));location.href='/';}catch(error){document.querySelector('#status').textContent=error.message;}});</script></html>`;
 let next;
 const proxy = createServer(async (req, res) => {
   // Keep the app, Auth storage key and strict API CORS on one local origin.
@@ -757,7 +775,10 @@ const proxy = createServer(async (req, res) => {
 function listen(server, port) {
   return new Promise((resolve, reject) => {
     server.once("error", reject);
-    server.listen(port, "127.0.0.1", resolve);
+    server.listen(port, "127.0.0.1", () => {
+      server.removeListener("error", reject);
+      resolve();
+    });
   });
 }
 try {
@@ -802,9 +823,19 @@ try {
   apiServer.close();
   proxy.close();
   await db.close();
-  throw error;
+  if (error.code !== "EADDRINUSE") throw error;
+  console.error(
+    `Não foi possível iniciar a demo: a porta ${error.port} já está em uso.\n` +
+      `Se outra demo estiver aberta, acesse ${ORIGIN}/__demo.\n` +
+      "Para carregar as alterações, encerre a demo anterior com Ctrl+C no terminal original e execute npm run demo:local novamente.\n" +
+      "Encerrar a demo apaga os dados temporários dessa sessão.",
+  );
+  process.exitCode = 1;
 }
+let stopping = false;
 function stop() {
+  if (stopping) return;
+  stopping = true;
   next?.kill();
   apiServer.close();
   proxy.close();

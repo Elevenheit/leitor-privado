@@ -510,14 +510,18 @@ export function AdminDashboard({ user }: { user: User }) {
   return (
     <>
       <Nav />
-      <main id="main-content" tabIndex={-1} className="dashboard">
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="dashboard admin-dashboard"
+      >
         <CatalogAccess ownerId={user.id} onChanged={load} />
         <section className="library-section">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Acervo privado</span>
+              <span className="eyebrow">Administração do acervo</span>
               <h1>
-                Minha biblioteca <span className="count">{totalCount}</span>
+                Gerenciar biblioteca <span className="count">{totalCount}</span>
               </h1>
             </div>
             <div className="library-buttons">
@@ -666,7 +670,7 @@ export function AdminDashboard({ user }: { user: User }) {
                           </div>
                           <small className="visibility-badge">
                             {item.beta_visible
-                              ? "Liberada aos convidados"
+                              ? "Publicada"
                               : "Restrita à administração"}
                           </small>
                           <div className="series-actions">

@@ -1,26 +1,55 @@
-# Estado verificável do Nook
+# Estado do Nook — 9/10/2026
 
-O Nook é um leitor privado de Light Novels em PDF e Mangás/Manhwas em CBZ. O visual da biblioteca, das obras e do leitor PDF foi preservado.
+Atualização de publicação: o Supabase remoto recebeu as migrações e correções
+de segurança; Render recebeu as variáveis do projeto. O estado atual e as
+pendências estão em [PUBLICACAO](PUBLICACAO.md). O restante deste arquivo
+registra a validação local anterior à publicação.
 
-## Verificado localmente
+Quatro etapas implementadas localmente: cadastro aberto/acesso permanente;
+extração conservadora/âncoras remotas; sumário e busca no PDF; catálogo paginado no
+servidor e controles móveis. Migrações 014–016 preparadas e testadas em PostgreSQL local.
 
-- `npm test`: migrations, RLS, isolamento de progresso, favoritos, marcadores, Storage privado, validação de PDF/CBZ e ordenação natural das páginas.
-- `npm run lint`, `npm run typecheck` e `npm run build`.
-- O teste de navegador cobre o worker CBZ com imagens reais e a tela de acesso em desktop e celular. Requer Chromium e servidor local.
+Admins, suspensões, publicação explícita, RLS e Storage privado permanecem.
+Nenhum deploy ou SQL remoto foi executado. A aplicação remota existente só muda
+quando a revisão e as migrações forem aplicadas.
 
-## Funcionalidades
+Testes unitários/SQL, lint, TypeScript, build, navegador de componentes e aplicação
+Next passaram. Demonstração local validou cadastro sem convite, leitor/admin,
+leitura, upload e CORS reais no localhost. Catálogo medido com 1.001 obras e 10.003
+capítulos: 26 consultas/2.706.331 bytes antes, uma consulta/10.051 bytes depois.
+Os tempos locais e limites da medição estão no relatório.
 
-| Área | Estado |
-|---|---|
-| Biblioteca | Busca, categorias, favoritos, capas privadas, histórico recente ordenado por `reading_progress.updated_at` |
-| Obra | Capa, sinopse, volumes, capítulos e continuação do último capítulo lido |
-| PDF | Texto contínuo, modo página, ilustrações, índice, marcadores, progresso e navegação entre capítulos |
-| CBZ | ZIP validado, JPG/PNG/WebP, ordenação natural, leitura vertical contínua, extração próxima à viewport e progresso por página/posição |
-| Administração | Obras, volumes, capas, upload individual e em lote de PDF/CBZ, organização e moderação |
-| Privacidade | Auth, RLS, buckets privados, URLs assinadas e isolamento de dados pessoais |
+[Relatório](LANCAMENTO-NOOK.md): evidências, medidas e limites.
+[MIGRATIONS](MIGRATIONS.md): instalação/upgrade, Auth e administrador.
+[TESTE-LOCAL-RENDER](TESTE-LOCAL-RENDER.md): experimentar/publicar.
+[E2E](E2E.md): homologação isolada.
 
-## Pendente de homologação autenticada
+Pendências externas: e-mails/redirects reais, Supabase/Storage reais, retomada entre
+aparelhos, restauração operacional e publicação na origem escolhida.
 
-Não há projeto Supabase separado configurado neste repositório. Por isso, a rota autenticada de upload, a restauração de progresso entre dispositivos, os marcadores, as capas e o leitor em aparelhos reais ainda precisam ser verificados em um clone aprovado. O build e os testes locais não substituem essa verificação.
+## Renovação visual — implementada localmente
 
-A migration 012 não foi aplicada remotamente. Ela aborta se houver registros ou objetos legados incompatíveis; faça backup e resolva esses registros antes de aplicá-la. Consulte [MIGRATIONS.md](MIGRATIONS.md) e [BETA.md](BETA.md).
+Interface em preto e azul, com tokens semânticos para superfícies, controles,
+ações, foco e mensagens. Navegação consolidada; cartões, filtros, formulários,
+perfil, administração, gerenciamento e leitores renovados. Perfil em duas colunas
+quando há espaço, recuperação de senha com campos padronizados, categorias
+acessíveis pela página Sobre e páginas próprias de erro/404. Corrigido o
+transbordamento do histórico completo no celular. CSS antigo sem consumidores
+foi removido; regras de navegação e painéis voltaram aos arquivos responsáveis.
+
+Temas claro/sépia, imagens originais, PDF/CBZ, posição de leitura e permissões
+preservados. Dependências, migrações, camada de dados e hooks não foram alterados.
+
+Validação desta renovação: `npm test`, `npm run lint`, `npm run typecheck`,
+`npm run build`, `npm run test:browser`, `npm run test:next-browser` e
+`npm run test:demo-local` aprovados. Páginas/estados revisados entre 320 e 1920 px,
+incluindo paisagem, controles principais com alvo de 44 px, teclado, movimento
+reduzido e contraste dos controles do painel nos três temas. Além do zoom CSS
+existente, Chromium validou zoom nativo de 200% a 320 CSS px, com navegação do PDF,
+resultados, ação de leitura e fechamento acessíveis. Next real verificou 13
+larguras, PDF.js/CBZ, retomada, sumário/busca, 404 e descarte de recursos.
+
+Capturas regeneráveis: `artifacts/browser` e `artifacts/next-browser`; o conteúdo
+nelas é de teste. A demo foi validada em uma cópia temporária com portas
+alternativas, preservando a sessão que já estava aberta. Nenhum deploy ou
+serviço remoto foi alterado; as pendências externas acima continuam aplicáveis.

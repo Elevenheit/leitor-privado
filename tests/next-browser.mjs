@@ -19,9 +19,12 @@ const env = {
   NEXT_PUBLIC_SUPABASE_ANON_KEY: "local-ui-mock-no-credentials",
   NOOK_UI_ORIGIN: origin,
 };
-function command(args) {
+function command(args, overrides = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, args, { env, stdio: "inherit" });
+    const child = spawn(process.execPath, args, {
+      env: { ...env, ...overrides },
+      stdio: "inherit",
+    });
     child.on("error", reject);
     child.on("exit", (code) =>
       code === 0
@@ -57,6 +60,10 @@ try {
   }
   assert.ok(started, "Local Next did not start.");
   await command(["tests/navigation-history.mjs"]);
+  if (!process.env.NOOK_AUDIT_LIFECYCLE_ONLY)
+    await command(["tests/navigation-history.mjs"], {
+      NOOK_AUDIT_LIFECYCLE_ONLY: "1",
+    });
 } finally {
   server.kill();
 }

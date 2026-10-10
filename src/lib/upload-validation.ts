@@ -130,7 +130,21 @@ export async function validateImageUpload(file: File, maxBytes = IMAGE_LIMIT) {
   }
 }
 
-export async function validateStorageUpload(file: File, bucket: "novels" | "covers" | "profiles") {
+const validations = new WeakMap<File, Map<string, Promise<number | void>>>();
+
+/** Files are immutable. Reuse preflight validation when the same file reaches transport. */
+export function validateStorageUpload(file: File, bucket: "novels" | "covers" | "profiles") {
+  let buckets = validations.get(file);
+  if (!buckets) { buckets = new Map(); validations.set(file, buckets); }
+  const existing = buckets.get(bucket);
+  if (existing) return existing;
+  const pending = validateStorageUploadUncached(file, bucket);
+  buckets.set(bucket, pending);
+  void pending.catch(() => { if (buckets.get(bucket) === pending) buckets.delete(bucket); });
+  return pending;
+}
+
+async function validateStorageUploadUncached(file: File, bucket: "novels" | "covers" | "profiles") {
   if (bucket !== "novels") return validateImageUpload(file, bucket === "profiles" ? IMAGE_LIMIT : 10 * MiB);
   if (!file.size) throw new Error("Arquivo vazio.");
   const extension = extensionOf(file);

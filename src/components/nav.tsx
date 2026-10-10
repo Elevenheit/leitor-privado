@@ -9,6 +9,10 @@ import {
   Bookmark,
   ChevronUp,
   Home,
+  Library,
+  History,
+  Search,
+  Plus,
   Info,
   Layers,
   LogOut,
@@ -20,17 +24,31 @@ import {
   X,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { loadLibraryAccess, hasLibraryAccess } from "@/lib/data/access";
 import { catalogContextKey, clearCatalogContexts } from "@/lib/catalog-context";
+import { syncPendingProgress } from "@/lib/data/progress";
+import { Button } from "@/components/ui/button";
+import { invalidateCatalogSnapshot } from "@/lib/data/catalog-cache";
+import { publishAppPreferences } from "@/lib/app-experience";
 
 const links = [
   { href: "/", label: "Início", icon: Home },
+  { href: "/library", label: "Biblioteca", icon: Library },
+  { href: "/continue", label: "Continuar lendo", icon: History },
+  { href: "/search", label: "Buscar", icon: Search },
   { href: "/category/novel", label: "Light Novels", icon: BookOpen },
   { href: "/category/manga", label: "Mangás", icon: BookImage },
   { href: "/category/manhwa", label: "Manhwas", icon: Layers },
   { href: "/list", label: "Minha lista", icon: Bookmark },
 ];
 
-export function Nav({ back = false }: { back?: boolean }) {
+export function Nav({
+  back = false,
+  onProfileLoad,
+}: {
+  back?: boolean;
+  onProfileLoad?: (name: string) => void;
+}) {
   const path = usePathname();
   const immersive = path.startsWith("/media/") || path.startsWith("/read/");
   const [expanded, setExpanded] = useState(false);
@@ -40,17 +58,58 @@ export function Nav({ back = false }: { back?: boolean }) {
   const [profile, setProfile] = useState({ name: "Meu espaço", avatar: "" });
   const drawer = useRef<HTMLDialogElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  const returnFocus = useRef<HTMLElement | null>(null);
   const root = useRef<HTMLDivElement>(null);
+  const rail = useRef<HTMLElement>(null);
+  const collapseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wide = expanded && !immersive;
 
   useEffect(() => {
+    return () => {
+      if (collapseTimer.current) clearTimeout(collapseTimer.current);
+    };
+  }, []);
+
+  function expandRail() {
+    if (collapseTimer.current) clearTimeout(collapseTimer.current);
+    setExpanded(true);
+  }
+  function scheduleCollapse() {
+    if (collapseTimer.current) clearTimeout(collapseTimer.current);
+    collapseTimer.current = setTimeout(() => {
+      const node = rail.current;
+      if (
+        node &&
+        !node.matches(":hover") &&
+        !node.contains(document.activeElement) &&
+        !node.querySelector("details[open]")
+      )
+        setExpanded(false);
+    }, 200);
+  }
+
+  useEffect(() => {
     let live = true;
+    let pendingOwner: string | null = null;
+    const synchronize = () => {
+      if (pendingOwner)
+        void syncPendingProgress(pendingOwner)
+          .then((count) => {
+            if (live && count)
+              window.dispatchEvent(new Event("nook-progress-synced"));
+          })
+          .catch(() => {
+            /* Pending positions remain on this device. */
+          });
+    };
     async function checkAdmin() {
       try {
         const api = supabase();
         const { data: session } = await api.auth.getSession();
         const userId = session.session?.user.id;
         if (!userId) return;
+        pendingOwner = userId;
+        synchronize();
         try {
           const route = sessionStorage.getItem(
             catalogContextKey(userId, "last-route"),
@@ -58,24 +117,16 @@ export function Nav({ back = false }: { back?: boolean }) {
           if (
             live &&
             route &&
-            /^(\/|\/list|\/category\/(novel|manga|manhwa))$/.test(route)
+            /^(\/|\/list|\/library|\/search|\/continue|\/category\/(novel|manga|manhwa))$/.test(
+              route,
+            )
           )
             setBackHref(route);
         } catch {
           /* The home route remains available without session storage. */
         }
-        const { data: access } = await api
-          .from("beta_access")
-          .select("role, expires_at, revoked")
-          .eq("user_id", userId)
-          .maybeSingle();
-        const expiry = access?.expires_at;
-        const expiryTime = expiry ? Date.parse(expiry) : Number.NaN;
-        const active =
-          access?.revoked === false &&
-          (expiry === "infinity" ||
-            (Number.isFinite(expiryTime) && expiryTime > Date.now()));
-        if (live) setAdmin(active && access?.role === "admin");
+        const access = await loadLibraryAccess(userId);
+        if (live) setAdmin(hasLibraryAccess(access, true));
       } catch {
         if (live) setAdmin(false);
       }
@@ -88,10 +139,11 @@ export function Nav({ back = false }: { back?: boolean }) {
         if (!userId) return;
         const { data } = await api
           .from("profiles")
-          .select("nickname,display_name,avatar_path")
+          .select("nickname,display_name,avatar_path,preferences")
           .eq("id", userId)
           .maybeSingle();
         if (!data) return;
+        if (live) publishAppPreferences(userId, data.preferences);
         const avatar = data.avatar_path
           ? (
               await api.storage
@@ -99,11 +151,13 @@ export function Nav({ back = false }: { back?: boolean }) {
                 .createSignedUrl(data.avatar_path, 3600)
             ).data?.signedUrl || ""
           : "";
-        if (live)
+        if (live) {
           setProfile({
             name: data.display_name || data.nickname || "Meu espaço",
             avatar,
           });
+          onProfileLoad?.(data.display_name || data.nickname || "");
+        }
       } catch {
         /* Keep the account menu fallback if the profile is unavailable. */
       }
@@ -113,6 +167,7 @@ export function Nav({ back = false }: { back?: boolean }) {
     const desktop = window.matchMedia("(min-width: 901px)");
     const closeOnDesktop = () => {
       if (desktop.matches) drawer.current?.close();
+      setExpanded(false);
     };
     const closeOutside = (event: PointerEvent) => {
       root.current
@@ -121,14 +176,29 @@ export function Nav({ back = false }: { back?: boolean }) {
           if (!details.contains(event.target as Node)) details.open = false;
         });
     };
+    const onStorage = (event: StorageEvent) => {
+      if (
+        pendingOwner &&
+        event.key?.startsWith(
+          `nook-progress:v1:${encodeURIComponent(pendingOwner)}:`,
+        )
+      ) {
+        invalidateCatalogSnapshot();
+        window.dispatchEvent(new Event("nook-progress-changed"));
+      }
+    };
     desktop.addEventListener("change", closeOnDesktop);
+    window.addEventListener("online", synchronize);
+    window.addEventListener("storage", onStorage);
     document.addEventListener("pointerdown", closeOutside);
     return () => {
       live = false;
       desktop.removeEventListener("change", closeOnDesktop);
+      window.removeEventListener("online", synchronize);
+      window.removeEventListener("storage", onStorage);
       document.removeEventListener("pointerdown", closeOutside);
     };
-  }, []);
+  }, [onProfileLoad]);
 
   function closeMenus() {
     root.current
@@ -137,6 +207,11 @@ export function Nav({ back = false }: { back?: boolean }) {
         details.open = false;
       });
     drawer.current?.close();
+  }
+  function openDrawer() {
+    returnFocus.current = document.activeElement as HTMLElement | null;
+    drawer.current?.showModal();
+    setMobileOpen(true);
   }
   function navigation(full: boolean) {
     return (
@@ -167,6 +242,7 @@ export function Nav({ back = false }: { back?: boolean }) {
     return (
       <details
         className="rail-account"
+        onToggle={scheduleCollapse}
         onKeyDown={(event) => {
           if (event.key === "Escape" && event.currentTarget.open) {
             event.preventDefault();
@@ -232,6 +308,7 @@ export function Nav({ back = false }: { back?: boolean }) {
             onClick={() => {
               closeMenus();
               clearCatalogContexts();
+              invalidateCatalogSnapshot();
               void supabase().auth.signOut();
             }}
           >
@@ -252,7 +329,29 @@ export function Nav({ back = false }: { back?: boolean }) {
       <a className="skip-link" href="#main-content">
         Pular para o conteúdo
       </a>
-      <aside className="navigation-rail" aria-label="Navegação do Nook">
+      <aside
+        className="navigation-rail"
+        aria-label="Navegação do Nook"
+        ref={rail}
+        onPointerEnter={(event) => {
+          if (
+            event.pointerType === "mouse" &&
+            window.matchMedia("(hover: hover) and (pointer: fine)").matches
+          )
+            expandRail();
+        }}
+        onPointerLeave={scheduleCollapse}
+        onFocusCapture={(event) => {
+          // Touch buttons receive native focus before click; don't toggle twice.
+          if (
+            event.target.closest(".rail-toggle") &&
+            window.matchMedia("(hover: none), (pointer: coarse)").matches
+          )
+            return;
+          expandRail();
+        }}
+        onBlurCapture={scheduleCollapse}
+      >
         <Link
           href={back ? backHref : "/"}
           className="rail-brand"
@@ -267,7 +366,9 @@ export function Nav({ back = false }: { back?: boolean }) {
             aria-expanded={wide}
             aria-controls="desktop-rail-content"
             aria-label={wide ? "Recolher navegação" : "Expandir navegação"}
-            onClick={() => setExpanded(!wide)}
+            onClick={() => {
+              setExpanded(!wide);
+            }}
             title={wide ? "Recolher navegação" : "Expandir navegação"}
           >
             {wide ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
@@ -276,6 +377,21 @@ export function Nav({ back = false }: { back?: boolean }) {
         )}
         <div className="rail-content" id="desktop-rail-content">
           {navigation(wide)}
+          {admin && (
+            <Link
+              href="/admin"
+              className="rail-link rail-add"
+              title={wide ? undefined : "Adicionar conteúdo"}
+            >
+              <Plus size={21} aria-hidden="true" />
+              <span className="rail-label">Adicionar conteúdo</span>
+              {!wide && (
+                <span className="rail-tooltip" aria-hidden="true">
+                  Adicionar conteúdo
+                </span>
+              )}
+            </Link>
+          )}
         </div>
         {account()}
       </aside>
@@ -283,20 +399,49 @@ export function Nav({ back = false }: { back?: boolean }) {
         <Link href="/" className="logo" aria-label="Nook, início">
           nook<span className="logo-dot">.</span>
         </Link>
-        <button
-          className="icon-button"
-          ref={trigger}
-          aria-label="Abrir navegação"
-          aria-expanded={mobileOpen}
-          aria-controls="mobile-navigation-drawer"
-          onClick={() => {
-            drawer.current?.showModal();
-            setMobileOpen(true);
-          }}
-        >
-          <Menu size={22} />
-        </button>
+        {immersive && (
+          <Button
+            className="icon-button"
+            ref={trigger}
+            aria-label="Abrir navegação"
+            aria-expanded={mobileOpen}
+            aria-controls="mobile-navigation-drawer"
+            variant="icon"
+            onClick={openDrawer}
+          >
+            <Menu size={22} />
+          </Button>
+        )}
       </header>
+      {!immersive && (
+        <nav className="bottom-navigation" aria-label="Navegação inferior">
+          {[
+            { href: "/", label: "Início", icon: Home },
+            { href: "/library", label: "Biblioteca", icon: Library },
+            { href: "/continue", label: "Continuar", icon: History },
+            { href: "/search", label: "Buscar", icon: Search },
+          ].map(({ href, label, icon: Icon }) => (
+            <Link
+              key={href}
+              href={href}
+              aria-current={path === href ? "page" : undefined}
+            >
+              <Icon size={21} aria-hidden="true" />
+              <span>{label}</span>
+            </Link>
+          ))}
+          <button
+            ref={trigger}
+            aria-label="Abrir navegação"
+            aria-expanded={mobileOpen}
+            aria-controls="mobile-navigation-drawer"
+            onClick={openDrawer}
+          >
+            <Menu size={21} aria-hidden="true" />
+            <span>Mais</span>
+          </button>
+        </nav>
+      )}
       <dialog
         className="navigation-drawer"
         id="mobile-navigation-drawer"
@@ -304,7 +449,7 @@ export function Nav({ back = false }: { back?: boolean }) {
         aria-label="Menu do Nook"
         onClose={() => {
           setMobileOpen(false);
-          trigger.current?.focus();
+          (returnFocus.current || trigger.current)?.focus();
         }}
         onClick={(event) => {
           if (event.target === event.currentTarget) drawer.current?.close();

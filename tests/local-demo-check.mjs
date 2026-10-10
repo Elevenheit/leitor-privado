@@ -19,6 +19,7 @@ context.on("request", (request) => {
 });
 const page = await context.newPage();
 const demoTitle = `Obra criada na demonstração ${Date.now()}`;
+const markerTitle = `Marcador temporário ${Date.now()}`;
 page.on("pageerror", (error) => errors.push(error.message));
 try {
   await page.goto("http://127.0.0.1:3100/__demo");
@@ -46,10 +47,10 @@ try {
     "Original local paragraph",
   );
   await page.getByRole("button", { name: "Marcadores", exact: true }).click();
-  await page.getByLabel("Nome opcional").fill("Marcador temporário");
+  await page.getByLabel("Nome opcional").fill(markerTitle);
   await page.getByRole("button", { name: "Salvar posição atual" }).click();
   await expect(
-    page.getByRole("button", { name: /^Marcador temporário/ }),
+    page.getByRole("button", { name: new RegExp(`^${markerTitle} `) }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Fechar marcadores" }).click();
   await page
@@ -57,7 +58,7 @@ try {
     .click();
   await expect(page.locator(".series-hero-copy h1")).toBeVisible();
   await page.goto(
-    "http://127.0.0.1:3100/media/10000000-0000-4000-8000-000000001200",
+    "http://127.0.0.1:3100/media/10000000-0000-4000-8000-000000001200?restart=1",
   );
   await expect(
     page.getByRole("img", { name: "Página 1", exact: true }),
@@ -128,10 +129,31 @@ try {
   await expect(page.locator(".series-card")).toHaveCount(24);
   await page.getByLabel("Busca global de obras").fill(demoTitle);
   await expect(page.getByText("Nenhuma obra encontrada.")).toBeVisible();
+  // Actual local Auth endpoint + SQL trigger: a new reader needs no invitation.
+  await page.locator(".navigation-rail .rail-account summary").click();
+  await page
+    .locator(".navigation-rail")
+    .getByRole("button", { name: "Sair", exact: true })
+    .click();
+  await expect(page.getByLabel("E-mail", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Criar conta", exact: true }).click();
+  await page
+    .getByLabel("E-mail", { exact: true })
+    .fill(`new-${Date.now()}@example.test`);
+  await page.getByLabel("Senha", { exact: true }).fill("fictional-new-pass");
+  await page
+    .locator("form")
+    .getByRole("button", { name: "Criar conta", exact: true })
+    .click();
+  await expect(page.locator(".series-card")).toHaveCount(24);
+  await page.goto("http://127.0.0.1:3100/admin");
+  await expect(
+    page.getByRole("heading", { name: "Acesso indisponível", exact: true }),
+  ).toBeVisible();
   assert.deepEqual(errors, []);
   assert.deepEqual(blocked, []);
   console.log(
-    "PASS: interactive local demo login, catalog/RLS, pagination/global start, real PDF/CBZ, bookmark/progress, profile, restricted work creation and local TUS upload. No external requests.",
+    "PASS: local demo signup without invitation/admin denial, login, catalog/RLS, pagination/global start, real PDF/CBZ, bookmark/progress, profile, restricted work creation and local TUS upload. No external requests.",
   );
 } finally {
   await browser.close();

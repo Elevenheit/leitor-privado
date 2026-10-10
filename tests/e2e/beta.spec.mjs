@@ -43,16 +43,6 @@ function originalPdf() {
   return Buffer.from(pdf);
 }
 test.beforeAll(async () => {
-  checked(
-    await service
-      .from("beta_invites")
-      .insert(
-        emails.map((email) => ({
-          email,
-          expires_at: new Date(Date.now() + 86400000).toISOString(),
-        })),
-      ),
-  );
   for (const role of ["admin", "reader", "denied"]) {
     const email = `${role}-${run}@example.test`;
     const data = checked(
@@ -120,13 +110,14 @@ test.afterAll(async () => {
   if (seriesId)
     checked(await service.from("series").delete().eq("id", seriesId));
   if (path) checked(await service.storage.from("novels").remove([path]));
-  const claimed = checked(
-    await service.from("beta_invites").select("claimed_by").in("email", emails),
-  );
-  checked(await service.from("beta_invites").delete().in("email", emails));
+  const users = checked(
+    await service.auth.admin.listUsers({ perPage: 1000 }),
+  ).users;
   const ids = new Set([
     ...Object.values(accounts).map((a) => a.id),
-    ...claimed.map((r) => r.claimed_by).filter(Boolean),
+    ...users
+      .filter((user) => emails.includes(user.email))
+      .map((user) => user.id),
   ]);
   for (const id of ids) checked(await service.auth.admin.deleteUser(id));
 });
@@ -144,7 +135,7 @@ async function login(page, role) {
   await page.getByLabel("Senha", { exact: true }).fill(password);
   await page
     .locator("form")
-    .getByRole("button", { name: "Entrar", exact: true })
+    .getByRole("button", { name: "Entrar na biblioteca", exact: true })
     .click();
 }
 test("reader: catalog, favorite, PDF, bookmark, comment, profile, admin denial and logout", async ({
@@ -199,9 +190,11 @@ test("admin: publication, authorization and moderation", async ({ page }) => {
   await page.getByRole("button", { name: /Liberar obra autorizada/ }).click();
   await page
     .getByRole("dialog")
-    .getByRole("button", { name: "Liberar aos convidados", exact: true })
+    .getByRole("button", { name: "Liberar aos leitores", exact: true })
     .click();
-  await expect(page.getByText("Obra liberada aos convidados.")).toBeVisible();
+  await expect(
+    page.getByText("Obra publicada para os leitores."),
+  ).toBeVisible();
   await page.goto(`/series/${seriesId}`);
   await expect(page.locator(".comment")).toContainText(`comment-${run}`);
   page.once("dialog", (dialog) => dialog.accept());
@@ -225,21 +218,13 @@ test("revoked access denied and mobile library without overflow", async ({
     ),
   ).toBe(true);
 });
-test("invited signup and non-invited denial", async ({ page }) => {
+test("signup without invitation", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Criar conta", exact: true }).click();
   await page
     .getByLabel("E-mail", { exact: true })
-    .fill(`uninvited-${run}@example.test`);
-  await page.getByLabel("Senha", { exact: true }).fill(password);
-  await page
-    .locator("form")
-    .getByRole("button", { name: "Criar conta", exact: true })
-    .click();
-  await expect(page.getByRole("alert")).toBeVisible();
-  await page
-    .getByLabel("E-mail", { exact: true })
     .fill(`signup-${run}@example.test`);
+  await page.getByLabel("Senha", { exact: true }).fill(password);
   await page
     .locator("form")
     .getByRole("button", { name: "Criar conta", exact: true })

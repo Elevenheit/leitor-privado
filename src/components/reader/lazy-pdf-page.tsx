@@ -6,10 +6,12 @@ export function LazyPdfPage({
   pdf,
   page,
   active,
+  onReady,
 }: {
   pdf: PDFDocumentProxy;
   page: number;
   active: boolean;
+  onReady?: (page: number) => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -30,6 +32,7 @@ export function LazyPdfPage({
     let cancelled = false;
     let task: { cancel: () => void; promise: Promise<unknown> } | null = null;
     const canvas = canvasRef.current;
+    canvas.dataset.ready = "false";
     async function render() {
       try {
         const pdfPage = await pdf.getPage(page);
@@ -37,21 +40,32 @@ export function LazyPdfPage({
         const base = pdfPage.getViewport({ scale: 1 });
         if (hostRef.current)
           hostRef.current.style.aspectRatio = `${base.width} / ${base.height}`;
-        const ratio = Math.min(window.devicePixelRatio || 1, 2);
+        const cssWidth = Math.min(width, 940);
+        const ratio = Math.min(
+          window.devicePixelRatio || 1,
+          2,
+          Math.sqrt(
+            8_000_000 / ((cssWidth * cssWidth * base.height) / base.width),
+          ),
+        );
         const viewport = pdfPage.getViewport({
           scale: (Math.min(width, 940) / base.width) * ratio,
         });
         canvas.width = viewport.width;
         canvas.height = viewport.height;
-        canvas.style.width = `${viewport.width / ratio}px`;
-        canvas.style.height = `${viewport.height / ratio}px`;
+        canvas.style.width = "100%";
+        canvas.style.height = "auto";
         task = pdfPage.render({
           canvas,
           canvasContext: canvas.getContext("2d")!,
           viewport,
         });
         await task.promise;
-        if (!cancelled) setError(false);
+        if (!cancelled) {
+          canvas.dataset.ready = "true";
+          setError(false);
+          onReady?.(page);
+        }
       } catch {
         if (!cancelled) setError(true);
       }
@@ -63,7 +77,7 @@ export function LazyPdfPage({
       canvas.width = 0;
       canvas.height = 0;
     };
-  }, [pdf, page, active, width, attempt]);
+  }, [pdf, page, active, width, attempt, onReady]);
   return (
     <div className="pdf-page" ref={hostRef}>
       {error && active && (

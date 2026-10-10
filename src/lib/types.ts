@@ -53,6 +53,10 @@ export type ReadingProgress = {
   updated_at: string;
   completed: boolean;
   page_count?: number | null;
+  /** Fraction within the original page; persisted since migration 015. */
+  page_offset?: number;
+  /** Character within the extracted paragraph; persisted since migration 015. */
+  text_offset?: number;
 };
 
 export type ReadingBookmark = {
@@ -64,6 +68,8 @@ export type ReadingBookmark = {
   scroll_ratio: number;
   label: string | null;
   created_at: string;
+  page_offset?: number;
+  text_offset?: number;
 };
 
 export function formatSize(bytes: number) {

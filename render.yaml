@@ -2,7 +2,7 @@ services:
   - type: web
     name: nook-closed-beta
     runtime: node
-    branch: feat/nook-closed-beta
+    # Use the branch selected for this Blueprint.
     autoDeployTrigger: off
     plan: free
     buildCommand: npm ci && npm run build

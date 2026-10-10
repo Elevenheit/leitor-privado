@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 import { LogOut, RefreshCw, ShieldCheck, Sparkles } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { loadLibraryAccess, hasLibraryAccess } from "@/lib/data/access";
 
 export function BetaAccess({
   children,
@@ -27,21 +28,8 @@ export function BetaAccess({
           if (live) setStatus("denied");
           return;
         }
-        const { data: access, error: accessError } = await api
-          .from("beta_access")
-          .select("role, expires_at, revoked")
-          .eq("user_id", userId)
-          .maybeSingle();
-        if (accessError) throw accessError;
-        const expiresAt = access?.expires_at;
-        const noExpiry = expiresAt === "infinity";
-        const expiryTime = expiresAt ? Date.parse(expiresAt) : Number.NaN;
-        const validExpiry =
-          noExpiry || (Number.isFinite(expiryTime) && expiryTime > Date.now());
-        const allowed =
-          access?.revoked === false &&
-          validExpiry &&
-          (!admin || access.role === "admin");
+        const access = await loadLibraryAccess(userId);
+        const allowed = hasLibraryAccess(access, admin);
         if (live) setStatus(allowed ? "ok" : "denied");
       } catch {
         if (live) setStatus("error");
@@ -69,7 +57,7 @@ export function BetaAccess({
         >
           {loading ? <Sparkles size={23} /> : <ShieldCheck size={23} />}
         </div>
-        <p className="eyebrow">Acesso ao beta</p>
+        <p className="eyebrow">Acesso à biblioteca</p>
         <h1>
           {loading
             ? "Abrindo seu Nook"
@@ -83,7 +71,7 @@ export function BetaAccess({
             : denied
               ? admin
                 ? "Esta área é exclusiva da administração."
-                : "Seu acesso ao beta expirou ou não está mais ativo."
+                : "Seu acesso está suspenso ou ainda não foi configurado."
               : "Não conseguimos confirmar sua sessão agora. Tente novamente ou saia para entrar outra vez."}
         </p>
         {loading && (

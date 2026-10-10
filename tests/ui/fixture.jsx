@@ -1,6 +1,10 @@
 import { createRoot } from "react-dom/client";
 import { useState } from "react";
+import { AppExperience } from "../../src/components/app-experience";
 import { AuthGate } from "../../src/components/auth-gate";
+import { AccountLink } from "../../src/components/auth/account-link";
+import { PdfNavigationFixture } from "./pdf-navigation-fixture";
+import { Comments } from "../../src/components/comments";
 import { Catalog } from "../../src/components/catalog";
 import { Nav } from "../../src/components/nav";
 import { SeriesHeader } from "../../src/components/series/series-header";
@@ -12,7 +16,15 @@ import ProfilePage from "../../src/app/profile/page";
 import AdminPage from "../../src/app/admin/page";
 import ManagePage from "../../src/app/manage/page";
 import AdminSeriesPage from "../../src/app/admin/series/[id]/page";
+import LibraryPage from "../../src/app/library/page";
+import SearchPage from "../../src/app/search/page";
+import ContinuePage from "../../src/app/continue/page";
+import AboutPage from "../../src/app/about/page";
+import NotFound from "../../src/app/not-found";
+import ErrorPage from "../../src/app/error";
 import { books, series, user } from "./supabase.mjs";
+import { prepareCoverImage } from "../../src/lib/cover-image";
+window.__nookTest.prepareCoverImage = prepareCoverImage;
 const adminSeriesParams = Promise.resolve({ id: "work-0" });
 
 function ReaderFixture() {
@@ -67,12 +79,34 @@ function ReaderFixture() {
 function Fixture() {
   const params = new URLSearchParams(location.search);
   const screen = params.get("screen") || "auth";
+  if (screen === "library") return <LibraryPage />;
+  if (screen === "search") return <SearchPage />;
+  if (screen === "continue") return <ContinuePage />;
+  if (screen === "about") return <AboutPage />;
+  if (screen === "not-found") return <NotFound />;
+  if (screen === "page-error")
+    return (
+      <ErrorPage
+        error={new Error("Local fixture")}
+        reset={() => {
+          window.__nookTest.resetClicks =
+            (window.__nookTest.resetClicks || 0) + 1;
+        }}
+      />
+    );
   if (screen === "profile") return <ProfilePage />;
+  if (screen === "comments")
+    return (
+      <main>
+        <Comments seriesId="work-0" userId={user.id} />
+      </main>
+    );
   if (screen === "admin") return <AdminPage />;
   if (screen === "manager") return <ManagePage />;
   if (screen === "admin-work")
     return <AdminSeriesPage params={adminSeriesParams} />;
   if (screen === "reader") return <ReaderFixture />;
+  if (screen === "pdf-navigation") return <PdfNavigationFixture />;
   if (screen === "cbz") return <CbzReader id="book-0" user={user} />;
   if (screen === "work")
     return (
@@ -96,6 +130,8 @@ function Fixture() {
         </main>
       </>
     );
+  if (screen === "recovery") return <AccountLink recovery />;
+  if (screen === "confirmation") return <AccountLink />;
   if (screen === "auth") return <AuthGate>{() => null}</AuthGate>;
   return (
     <Catalog
@@ -108,6 +144,7 @@ function Fixture() {
 createRoot(document.getElementById("root")).render(
   <>
     <DialogFocusManager />
+    <AppExperience />
     <Fixture />
   </>,
 );

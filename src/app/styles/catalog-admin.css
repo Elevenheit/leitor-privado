@@ -1,101 +1,6 @@
-/* Nook — premium beta interface */
-.profile-menu-avatar {
-  display: grid;
-  width: 27px;
-  height: 27px;
-  place-items: center;
-  border: 1px solid rgb(213 173 124 / 28%);
-  border-radius: 50%;
-  background: #33291f;
-  color: var(--accent);
-}
-.profile-menu-panel {
-  position: absolute;
-  top: calc(100% + 9px);
-  right: 0;
-  z-index: 50;
-  display: grid;
-  width: 215px;
-  padding: 7px;
-  border: 1px solid var(--border);
-  border-radius: 13px;
-  background: #24201b;
-  box-shadow: 0 18px 46px #0008;
-}
-.profile-menu-panel :is(a, button) {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  min-height: 43px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: #ded5ca;
-  text-align: left;
-  font-size: 12px;
-  cursor: pointer;
-}
-.profile-menu-panel :is(a, button):hover,
-.profile-menu-panel [aria-current="page"] {
-  background: #342c23;
-  color: var(--accent-hover);
-}
-.continue-card {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  min-width: 0;
-  min-height: 96px;
-  padding: 14px 17px;
-  border: 1px solid #40372e;
-  border-radius: 13px;
-  background: linear-gradient(115deg, #29231d, #211e1a 72%);
-  transition:
-    border-color 180ms ease,
-    transform 180ms ease;
-}
-.continue-card:hover {
-  transform: translateY(-2px);
-  border-color: #70573c;
-}
-.continue-icon {
-  display: grid;
-  flex: 0 0 46px;
-  height: 58px;
-  place-items: center;
-  border: 1px solid #574430;
-  border-radius: 8px;
-  background: #372b1f;
-  color: var(--accent);
-}
-.continue-copy {
-  display: grid;
-  flex: 1;
-  gap: 5px;
-  min-width: 0;
-}
-.continue-copy small {
-  color: #ad9678;
-  font-size: 9px;
-  letter-spacing: 0.12em;
-}
-.continue-copy strong {
-  overflow: hidden;
-  color: var(--text);
-  font: 500 17px/1.35 var(--font-literary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.continue-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  flex: 0 0 auto;
-  color: var(--accent);
-  font-size: 11px;
-}
-.beta-dashboard .pagination button, .comment-actions button {
+/* Administration and account access. */
+.beta-dashboard .pagination button,
+.comment-actions button {
   min-height: 44px;
   border-radius: 10px;
   background: var(--surface);
@@ -107,16 +12,17 @@
   place-items: center;
   padding: 28px 20px max(28px, env(safe-area-inset-bottom));
   background:
-    radial-gradient(ellipse at 50% 20%, #30251b 0, transparent 42%), var(--bg);
+    radial-gradient(ellipse at 50% 0, #2563eb0d, transparent 60%), var(--bg);
 }
 .access-card {
   width: min(100%, 480px);
   padding: clamp(28px, 7vw, 52px);
-  border: 1px solid #484035;
-  border-radius: 22px;
-  background: linear-gradient(155deg, #25211c, #1c1a17 68%);
+  border: 1px solid var(--border);
   box-shadow: 0 28px 90px #0008;
   text-align: center;
+  background: var(--surface);
+  border-color: var(--border);
+  border-radius: var(--radius-lg);
 }
 .access-brand {
   display: inline-flex;
@@ -133,10 +39,11 @@
   height: 58px;
   margin: 0 auto 25px;
   place-items: center;
-  border: 1px solid #70563b;
+  border: 1px solid var(--control-border);
   border-radius: 18px;
-  background: #352a1e;
   color: var(--accent-hover);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
 }
 .access-emblem.is-loading {
   animation: nook-breathe 1.8s ease-in-out infinite;
@@ -160,15 +67,15 @@
   max-width: 340px;
   margin: 16px auto 0;
   color: var(--muted);
-  font-size: 13px;
   line-height: 1.75;
+  font-size: 15px;
 }
 .access-progress {
   height: 2px;
   margin: 26px 0 0;
   overflow: hidden;
   border-radius: 3px;
-  background: #443a30;
+  background: var(--border);
 }
 .access-progress span {
   display: block;
@@ -199,7 +106,7 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 42px;
+  min-height: 44px;
   padding: 0 12px;
   border: 0;
   background: transparent;
@@ -209,10 +116,87 @@
 .access-logout:hover {
   color: var(--text);
 }
-.library-picker { display:grid; gap:10px; min-width:0; margin:0; padding:0; border:0; }
-.library-picker label { display:grid; gap:6px; min-width:0; font-size:13px; color:var(--muted); }
-.library-picker :is(input,select) { min-width:0; width:100%; min-height:44px; padding:10px 12px; border:1px solid var(--border); border-radius:5px; color:var(--text); background:var(--surface); }
-.picker-pages { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-.picker-pages button { min-height:44px; padding:8px; font-size:12px; }
-.visibility-badge { display:inline-block; padding:5px 8px; border:1px solid var(--border); border-radius:4px; color:var(--accent); font-size:11px; line-height:1.5; }
-.publication-state { display:flex; flex-wrap:wrap; align-items:center; gap:12px; }
+.library-picker {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.library-picker label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.library-picker :is(input, select) {
+  min-width: 0;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--control-border);
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--control-border);
+  border-radius: var(--radius-sm);
+  font-size: 16px;
+}
+.picker-pages {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.picker-pages button {
+  min-height: 44px;
+  padding: 8px;
+  font-size: 12px;
+}
+.visibility-badge {
+  display: inline-block;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  color: var(--accent);
+  line-height: 1.5;
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.publication-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.admin-dashboard > .library-section {
+  margin-top: 28px;
+}
+.admin-dashboard .section-head {
+  align-items: center;
+}
+.admin-dashboard .publisher {
+  margin-top: 0;
+  background: var(--surface);
+}
+.admin-dashboard .toolbar {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.admin-dashboard .toolbar .search {
+  flex: 1;
+  width: auto;
+  background: var(--bg);
+}
+@media (max-width: 700px) {
+  .admin-dashboard .toolbar {
+    padding: 12px;
+  }
+  .admin-dashboard .toolbar .search {
+    flex-basis: 100%;
+  }
+}

@@ -8,6 +8,10 @@ import { replaceStorageReference } from "@/lib/data/uploads";
 import { toDataError } from "@/lib/data/errors";
 import { patchProfileSettings } from "@/lib/data/preferences";
 import {
+  normalizeAppPreferences,
+  type AppPreferences,
+} from "@/lib/app-experience";
+import {
   normalizeReaderPreferences,
   type ReaderPreferences,
 } from "@/lib/reader-preferences";
@@ -24,6 +28,8 @@ function Profile({ id }: { id: string }) {
   const [theme, setTheme] = useState("dark");
   const [fontSize, setFontSize] = useState(22);
   const [fontFamily, setFontFamily] = useState("serif");
+  const [welcomeSound, setWelcomeSound] = useState(false);
+  const [reduceMotion, setReduceMotion] = useState(false);
   const [password, setPassword] = useState("");
   const [current, setCurrent] = useState("");
   const [message, setMessage] = useState("");
@@ -31,6 +37,7 @@ function Profile({ id }: { id: string }) {
   const [ready, setReady] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const initialPreferences = useRef(normalizeReaderPreferences(null));
+  const initialAppPreferences = useRef(normalizeAppPreferences(null));
   useEffect(() => {
     let live = true;
     void Promise.resolve(
@@ -52,6 +59,10 @@ function Profile({ id }: { id: string }) {
           setAvatar(data.avatar);
           const prefs = normalizeReaderPreferences(data.preferences);
           initialPreferences.current = prefs;
+          const appPrefs = normalizeAppPreferences(data.preferences);
+          initialAppPreferences.current = appPrefs;
+          setWelcomeSound(appPrefs.welcomeSound);
+          setReduceMotion(appPrefs.reduceMotion);
           setTheme(prefs.theme);
           setFontSize(prefs.fontSize);
           setFontFamily(prefs.fontFamily);
@@ -90,7 +101,11 @@ function Profile({ id }: { id: string }) {
     setBusy(true);
     try {
       const prefs = normalizeReaderPreferences({ theme, fontSize, fontFamily });
-      const patch: Partial<ReaderPreferences> = {};
+      const patch: Partial<ReaderPreferences & AppPreferences> = {};
+      if (welcomeSound !== initialAppPreferences.current.welcomeSound)
+        patch.welcomeSound = welcomeSound;
+      if (reduceMotion !== initialAppPreferences.current.reduceMotion)
+        patch.reduceMotion = reduceMotion;
       if (prefs.theme !== initialPreferences.current.theme)
         patch.theme = prefs.theme;
       if (prefs.fontSize !== initialPreferences.current.fontSize)
@@ -103,6 +118,7 @@ function Profile({ id }: { id: string }) {
         bio,
         avatar,
       });
+      initialAppPreferences.current = { welcomeSound, reduceMotion };
       setTheme(initialPreferences.current.theme);
       setFontSize(initialPreferences.current.fontSize);
       setFontFamily(initialPreferences.current.fontFamily);
@@ -445,6 +461,38 @@ function Profile({ id }: { id: string }) {
                   onChange={(e) => setFontSize(Number(e.target.value))}
                 />
               </label>
+              <label className="profile-preference-check">
+                <input
+                  type="checkbox"
+                  checked={welcomeSound}
+                  onChange={(event) => setWelcomeSound(event.target.checked)}
+                />
+                <span>
+                  Som de boas-vindas
+                  <small>
+                    Um toque suave após sua primeira interação, uma vez por
+                    sessão.
+                  </small>
+                </span>
+              </label>
+              <label className="profile-preference-check">
+                <input
+                  type="checkbox"
+                  checked={reduceMotion}
+                  onChange={(event) => setReduceMotion(event.target.checked)}
+                />
+                <span>
+                  Reduzir animações
+                  <small>
+                    A preferência de redução de movimento do dispositivo também
+                    é respeitada.
+                  </small>
+                </span>
+              </label>
+              <p className="muted">
+                Fonte e tamanho se aplicam ao modo Texto. O PDF original mantém
+                sua diagramação.
+              </p>
             </div>
             <button
               type="submit"

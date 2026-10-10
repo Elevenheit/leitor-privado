@@ -9,7 +9,9 @@ import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { zipSync } from "fflate";
+import { tallImage } from "./ui/tall-image.mjs";
 import { securityHeaders } from "../src/lib/security-headers.ts";
+import { checkNativeZoom } from "./native-zoom.mjs";
 
 const bundle = await build({
   entryPoints: ["tests/ui/fixture.jsx"],
@@ -37,6 +39,12 @@ const css = await postcss([tailwindcss()]).process(
 );
 const png = readFileSync("tests/fixtures/nook-frame.png");
 const archive = zipSync({ "1.png": png, "2.png": png, "3.png": png });
+const tall = tallImage();
+const longArchive = zipSync(
+  Object.fromEntries(
+    Array.from({ length: 150 }, (_, i) => [`${i + 1}.png`, tall]),
+  ),
+);
 const server = createServer((req, res) => {
   for (const { key, value } of securityHeaders(undefined, true))
     res.setHeader(key, value);
@@ -49,7 +57,10 @@ const server = createServer((req, res) => {
       worker.outputFiles[0].text,
     ],
     "/cover.png": ["image/png", png],
-    "/chapter.cbz": ["application/zip", archive],
+    "/chapter.cbz": [
+      "application/zip",
+      req.url.includes("long=1") ? longArchive : archive,
+    ],
   };
   if (path === "/missing.png") {
     res.writeHead(404);
@@ -92,15 +103,217 @@ try {
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
+  page.on("console", (message) => {
+    if (
+      message.type() === "error" &&
+      !message.text().includes("Failed to load resource")
+    )
+      errors.push(message.text());
+  });
   const visit = async (screen, extra = "") => {
+    if (screen === "cbz")
+      await page
+        .evaluate(() => {
+          for (const key of Object.keys(localStorage))
+            if (key.startsWith("nook-progress:")) localStorage.removeItem(key);
+        })
+        .catch(() => {});
     await page.goto(`${base}/?screen=${screen}${extra}`);
     await expect(page.locator("main")).toBeVisible();
   };
-  for (const width of [1440, 768, 390, 320]) {
-    await page.setViewportSize({ width, height: 900 });
+  await page.goto(`${base}/?screen=auth&state=auth-race`);
+  await expect
+    .poll(() => page.evaluate(() => typeof window.__nookTest.resolveUser))
+    .toBe("function");
+  await page.evaluate(() => {
+    window.__nookTest.emitAuth("SIGNED_OUT", null);
+    window.__nookTest.resolveUser();
+  });
+  await expect(page.locator(".auth-card")).toBeVisible();
+  await visit("auth");
+  await page
+    .getByRole("button", { name: "Criar conta", exact: true })
+    .first()
+    .click();
+  await page.getByLabel("E-mail", { exact: true }).fill("novo@example.test");
+  await page.getByLabel("Senha", { exact: true }).fill("fictional-pass-123");
+  await page
+    .locator("form")
+    .getByRole("button", { name: "Criar conta", exact: true })
+    .click();
+  await expect(page.getByRole("status")).toContainText("Confira seu e-mail");
+  assert.ok(
+    (
+      await page.evaluate(() =>
+        window.__nookTest.calls.find((c) => c.auth === "signup"),
+      )
+    ).credentials.options.emailRedirectTo.endsWith("/auth/confirm"),
+  );
+  await page
+    .getByRole("button", { name: "Esqueci minha senha", exact: true })
+    .click();
+  await expect(page.getByLabel("Senha", { exact: true })).toHaveCount(0);
+  await page
+    .getByRole("button", { name: "Enviar link de recuperação", exact: true })
+    .click();
+  await expect(page.getByRole("status")).toContainText("Se houver uma conta");
+  assert.ok(
+    (
+      await page.evaluate(() =>
+        window.__nookTest.calls.find((c) => c.auth === "recover"),
+      )
+    ).options.redirectTo.endsWith("/auth/recovery"),
+  );
+  await visit("recovery");
+  await page
+    .getByLabel("Nova senha", { exact: true })
+    .fill("new-fictional-pass");
+  await page
+    .getByLabel("Confirmar nova senha", { exact: true })
+    .fill("different-fictional-pass");
+  await page
+    .getByRole("button", { name: "Salvar nova senha", exact: true })
+    .click();
+  await expect(page.getByRole("alert")).toContainText("iguais");
+  await page
+    .getByLabel("Confirmar nova senha", { exact: true })
+    .fill("new-fictional-pass");
+  await page
+    .getByRole("button", { name: "Salvar nova senha", exact: true })
+    .click();
+  await expect(page.getByRole("status")).toContainText("Senha atualizada");
+  await visit("recovery", "&error=access_denied");
+  await expect(page.getByRole("alert")).toContainText("inválido ou expirou");
+  await visit("confirmation");
+  await expect(page.getByRole("status")).toContainText("E-mail confirmado");
+  // Large-document searches stay bounded; closing discards an in-flight extraction.
+  await visit("pdf-navigation", "&state=slow");
+  assert.deepEqual(
+    await page.evaluate(() => window.__nookTest.pdfNavigation.pages),
+    [],
+  );
+  await page.getByRole("button", { name: "Abrir navegação" }).click();
+  await page.getByLabel("Buscar no documento").fill("archive");
+  await expect
+    .poll(() =>
+      page.evaluate(() => typeof window.__nookTest.pdfNavigation.release),
+    )
+    .toBe("function");
+  await page.keyboard.press("Escape");
+  await page.evaluate(() => window.__nookTest.pdfNavigation.release());
+  await page.waitForTimeout(400);
+  assert.deepEqual(
+    await page.evaluate(() => window.__nookTest.pdfNavigation.pages),
+    [1],
+  );
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await visit("pdf-navigation");
+  await page.getByRole("button", { name: "Abrir navegação" }).click();
+  await expect(page.getByText(/não possui sumário interno/)).toBeVisible();
+  await page.getByLabel("Buscar no documento").fill("archive");
+  await expect(page.getByRole("status")).toHaveText("Até 200 resultados");
+  assert.deepEqual(
+    await page.evaluate(() => window.__nookTest.pdfNavigation.pages),
+    [1],
+  );
+  await page.getByRole("button", { name: "Ler trecho selecionado" }).click();
+  assert.equal(
+    (await page.evaluate(() => window.__nookTest.pdfNavigation.jumps))[0].page,
+    1,
+  );
+  await visit("pdf-navigation", "&state=scan");
+  await page.getByRole("button", { name: "Abrir navegação" }).click();
+  await page.getByLabel("Buscar no documento").fill("archive");
+  await expect(page.getByText(/não tem texto pesquisável/)).toBeVisible();
+  await expect(page.getByRole("status")).toHaveText("0 resultados");
+  for (const theme of ["dark", "sepia", "light"]) {
+    await visit("pdf-navigation", `&theme=${theme}`);
+    await page.getByRole("button", { name: "Abrir navegação" }).click();
+    await expect(page.getByText(/não possui sumário interno/)).toBeVisible();
+    const ratios = await page.getByRole("dialog").evaluate((dialog) => {
+      const luminance = (color) => {
+        const channels = color
+          .match(/[\d.]+/g)
+          .slice(0, 3)
+          .map(Number)
+          .map((c) => {
+            c /= 255;
+            return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+          });
+        return (
+          channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722
+        );
+      };
+      const background = getComputedStyle(dialog).backgroundColor;
+      return [
+        ...dialog.querySelectorAll(
+          "h2, .secondary-button, header button, input",
+        ),
+      ].map((node) => {
+        const style = getComputedStyle(node);
+        const foreground = luminance(style.color);
+        const surface = luminance(
+          style.backgroundColor === "rgba(0, 0, 0, 0)"
+            ? background
+            : style.backgroundColor,
+        );
+        return (
+          (Math.max(foreground, surface) + 0.05) /
+          (Math.min(foreground, surface) + 0.05)
+        );
+      });
+    });
+    assert.ok(
+      ratios.every((ratio) => ratio >= 4.5),
+      `${theme}: ${ratios}`,
+    );
+  }
+  // Refreshing the conversation while its first request is slow keeps the newer response.
+  await visit("comments", "&state=comment-race");
+  await expect
+    .poll(() =>
+      page.evaluate(() => typeof window.__nookTest.releaseCommentRead),
+    )
+    .toBe("function");
+  await page
+    .getByRole("button", { name: "Atualizar conversa", exact: true })
+    .click();
+  await expect(
+    page.getByText("Conversa carregada 2", { exact: true }),
+  ).toBeVisible();
+  await page.evaluate(() => window.__nookTest.releaseCommentRead());
+  await page.waitForTimeout(150);
+  await expect(
+    page.getByText("Conversa carregada 2", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Conversa carregada 1", { exact: true }),
+  ).toHaveCount(0);
+  for (const [width, height] of [
+    [1920, 1080],
+    [1366, 768],
+    [1440, 900],
+    [768, 900],
+    [900, 900],
+    [1024, 768],
+    [430, 932],
+    [844, 390],
+    [390, 844],
+    [360, 800],
+    [320, 900],
+  ]) {
+    await page.setViewportSize({ width, height });
     for (const screen of [
       "auth",
+      "confirmation",
+      "recovery",
       "catalog",
+      "library",
+      "search",
+      "continue",
+      "about",
+      "not-found",
+      "page-error",
       "category",
       "list",
       "work",
@@ -128,12 +341,56 @@ try {
         await expect(
           page.getByRole("img", { name: "Página 1", exact: true }),
         ).toBeVisible();
+      if (screen === "about") {
+        await expect(
+          page
+            .locator(".welcome")
+            .getByRole("link", { name: "Light Novels", exact: true }),
+        ).toHaveAttribute("href", "/category/novel");
+      }
+      if (screen === "not-found") {
+        await expect(
+          page.getByRole("link", { name: "Ir para o início", exact: true }),
+        ).toHaveAttribute("href", "/");
+      }
+      if (screen === "page-error") {
+        await page
+          .getByRole("button", { name: "Tentar novamente", exact: true })
+          .click();
+        assert.equal(
+          await page.evaluate(() => window.__nookTest.resetClicks),
+          1,
+        );
+      }
       assert.equal(
         await page.evaluate(
           () => document.documentElement.scrollWidth <= innerWidth,
         ),
         true,
         `${screen}: horizontal overflow at ${width}px`,
+      );
+      const smallTargets = await page
+        .locator(
+          ".primary-button, .secondary-button, .favorite-button, .choice-row button, .reader-settings-button, .reader-quick-nav button, .mode-toggle button",
+        )
+        .evaluateAll((nodes) =>
+          nodes
+            .filter((node) => node.getClientRects().length && !node.disabled)
+            .map((node) => {
+              const rect = node.getBoundingClientRect();
+              return {
+                label:
+                  node.getAttribute("aria-label") || node.textContent.trim(),
+                width: rect.width,
+                height: rect.height,
+              };
+            })
+            .filter((target) => target.width < 43.5 || target.height < 43.5),
+        );
+      assert.deepEqual(
+        smallTargets,
+        [],
+        `${screen}: controls smaller than 44px at ${width}px`,
       );
       if ([1440, 390].includes(width))
         await page.screenshot({
@@ -159,10 +416,16 @@ try {
         await expect(
           covers.nth(1).locator(".cover-fallback-title"),
         ).toBeVisible();
+        const brokenCover = page.locator(
+          '.series-cover[href="/series/work-2"]',
+        );
+        await brokenCover.scrollIntoViewIfNeeded();
         await expect(
-          covers.nth(2).locator(".cover-fallback-title"),
+          brokenCover.locator(".cover-fallback-title"),
         ).toBeVisible();
-        await expect(covers.nth(3).locator("img")).toBeVisible();
+        const validCover = page.locator('.series-cover[href="/series/work-3"]');
+        await validCover.scrollIntoViewIfNeeded();
+        await expect(validCover.locator("img")).toBeVisible();
         await expect(covers.nth(0)).toHaveAccessibleName(
           "Abrir A biblioteca das estrelas esquecidas",
         );
@@ -194,7 +457,9 @@ try {
   ).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page.locator("#main-content")).toBeFocused();
-  await expect(page.locator(".history-cover img")).toHaveCount(0);
+  await expect(
+    page.locator(".history-featured .history-cover img"),
+  ).toHaveCount(0);
   await page.getByRole("button", { name: "Abrir navegação" }).click();
   await expect(
     page.getByRole("dialog", { name: "Menu do Nook" }),
@@ -203,6 +468,33 @@ try {
   await expect(
     page.getByRole("button", { name: "Abrir navegação" }),
   ).toBeFocused();
+  // Category, pending state and chapter search combine without navigation.
+  await page.getByRole("button", { name: "Mangá", exact: true }).click();
+  await expect(page.locator(".series-card")).toHaveCount(9);
+  await page.getByRole("button", { name: "Em andamento", exact: true }).click();
+  await expect(page.locator(".series-card")).toHaveCount(1);
+  await page.getByLabel("Busca global de obras").fill("capítulo 2");
+  await expect(page.locator(".series-card")).toHaveCount(1);
+  await page
+    .getByRole("button", { name: "Limpar filtros", exact: true })
+    .click();
+  await expect(page.locator(".series-card")).toHaveCount(24);
+  // Completion updates the mounted home immediately, without deleting history.
+  await page.evaluate(() => {
+    window.__nookTest.history[0].completed = true;
+    window.dispatchEvent(new Event("nook-progress-changed"));
+  });
+  await expect(page.locator('.history-card[href="/read/book-0"]')).toHaveCount(
+    0,
+  );
+  assert.equal(await page.evaluate(() => window.__nookTest.history.length), 4);
+  await page.evaluate(() => {
+    window.__nookTest.history[0].completed = false;
+    window.dispatchEvent(new Event("nook-progress-changed"));
+  });
+  await expect(
+    page.locator('.history-card[href="/read/book-0"]'),
+  ).toBeVisible();
   await page.getByLabel("Busca global de obras").fill("nada-encontrado");
   await expect(page.getByText("Nenhuma obra encontrada.")).toBeVisible();
   await page
@@ -288,12 +580,43 @@ try {
     .getByRole("button", { name: "Salvar alterações", exact: true })
     .click();
   await expect(page.getByText("Perfil salvo.")).toBeVisible();
+  await page.getByRole("checkbox", { name: /^Som de boas-vindas/ }).check();
+  await page.getByRole("checkbox", { name: /^Reduzir animações/ }).check();
+  await page
+    .getByRole("button", { name: "Salvar preferências", exact: true })
+    .click();
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.__nookTest.profile.preferences.welcomeSound),
+    )
+    .toBe(true);
+  await expect
+    .poll(() =>
+      page.evaluate(() => document.documentElement.dataset.reduceMotion),
+    )
+    .toBe("true");
+  // No autoplay: preference save does not play; the next trusted gesture unlocks audio.
+  assert.equal(
+    await page.evaluate(() =>
+      sessionStorage.getItem("nook-welcome-played:local-reader"),
+    ),
+    null,
+  );
+  await page.getByRole("textbox", { name: "Nickname", exact: true }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        sessionStorage.getItem("nook-welcome-played:local-reader"),
+      ),
+    )
+    .toBe("1");
+
   const profilePatch = await page.evaluate(() =>
     window.__nookTest.calls.find(
-      (call) => call.name === "patch_profile_settings",
+      (call) => call.table === "profiles" && call.update,
     ),
   );
-  assert.deepEqual(profilePatch.args.settings, {});
+  assert.equal(profilePatch.update.preferences.futureSetting, "preserved");
   assert.equal(
     await page.evaluate(() => window.__nookTest.profile.preferences.lineHeight),
     2.05,
@@ -414,8 +737,13 @@ try {
     page.getByRole("img", { name: "Página 1", exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Próxima →", exact: true }).click();
-  await expect(page.locator(".reader-save-feedback")).toBeVisible();
-  await page.getByRole("button", { name: "Tentar salvar novamente" }).click();
+  await expect(page.getByRole("status").last()).toContainText(
+    "Salvo neste dispositivo",
+  );
+  await page.evaluate(() => window.dispatchEvent(new Event("online")));
+  await expect(page.getByRole("status").last()).toContainText(
+    "Progresso salvo",
+  );
   await expect(page.locator(".reader-save-feedback")).toHaveCount(0);
   await visit("cbz", "&state=save-error&conflict=1");
   await expect(
@@ -425,6 +753,101 @@ try {
   await expect(
     page.getByRole("button", { name: "Carregar posição recente" }),
   ).toBeVisible();
+  // Large chapter: bounded extraction, tall image ratio and refresh restoration.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await visit("cbz", "&archive=long");
+  await expect(
+    page.getByRole("img", { name: "Página 1", exact: true }),
+  ).toBeVisible();
+  assert.ok((await page.locator(".cbz-page img").count()) <= 5);
+  await page.locator(".cbz-controls select").selectOption("74");
+  const longPage = page.getByRole("img", { name: "Página 75", exact: true });
+  await expect(longPage).toBeVisible();
+  await expect
+    .poll(() =>
+      longPage.evaluate((el) => el.complete && el.naturalHeight === 2400),
+    )
+    .toBe(true);
+  await page.locator('[data-page-index="74"]').evaluate((el) => {
+    window.scrollTo({
+      top:
+        window.scrollY +
+        el.getBoundingClientRect().top -
+        76 +
+        el.getBoundingClientRect().height * 0.42,
+      behavior: "instant",
+    });
+  });
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            JSON.parse(
+              localStorage.getItem("nook-progress:v1:local-reader:book-0") ||
+                "null",
+            )?.page_number,
+        ),
+      { timeout: 10000 },
+    )
+    .toBe(75);
+  const savedPosition = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("nook-progress:v1:local-reader:book-0")),
+  );
+  assert.ok(
+    Math.abs(savedPosition.scroll_ratio - 0.42) < 0.025,
+    JSON.stringify(savedPosition),
+  );
+  assert.ok((await page.locator(".cbz-page img").count()) <= 11);
+  await page.reload();
+  await expect(longPage).toBeVisible();
+  await expect
+    .poll(() =>
+      page
+        .locator('[data-page-index="74"]')
+        .evaluate(
+          (el) =>
+            (76 - el.getBoundingClientRect().top) /
+            el.getBoundingClientRect().height,
+        ),
+    )
+    .toBeCloseTo(0.42, 1);
+  await page.locator('[data-page-index="74"]').evaluate((el) => {
+    window.scrollBy({ top: 123, behavior: "instant" });
+    window.dispatchEvent(new Event("pagehide"));
+    return (
+      (76 - el.getBoundingClientRect().top) / el.getBoundingClientRect().height
+    );
+  });
+  await page.screenshot({ path: "artifacts/browser/cbz-tall-resume-390.png" });
+  const coverReduction = await page.evaluate(async () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1600;
+    canvas.height = 2400;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#c6a87f";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((resolve) =>
+      canvas.toBlob(resolve, "image/png"),
+    );
+    const file = await window.__nookTest.prepareCoverImage(
+      new File([blob], "cover.png", { type: "image/png" }),
+    );
+    const bitmap = await createImageBitmap(file);
+    const result = {
+      width: bitmap.width,
+      height: bitmap.height,
+      type: file.type,
+      before: blob.size,
+      after: file.size,
+    };
+    bitmap.close();
+    return result;
+  });
+  assert.equal(coverReduction.width, 720);
+  assert.equal(coverReduction.height, 1080);
+  assert.equal(coverReduction.type, "image/png");
+  assert.ok(coverReduction.after < coverReduction.before);
   // Preserve the complete cascade in the regression checks, including token ownership.
   const sourceSheets = [
     "base",
@@ -444,8 +867,9 @@ try {
   assert.equal(roots.length, 1, "Global tokens must have a single owner.");
   assert.equal(errors.length, 0, errors.join("\n"));
   assert.equal(blocked.length, 0, "Fixture attempted a nonlocal request.");
+  await checkNativeZoom(base);
   console.log(
-    "PASS: real UI components at 1440/768/390/320px; missing/broken covers; keyboard focus and mobile menu; search/empty/error/retry/pagination/favorites; profile/admin; PDF toolbar themes; real CBZ reader; reduced motion. All data and network traffic stayed local.",
+    "PASS: all UI routes and account/error states at 320–1920px and landscape; missing/broken covers; keyboard focus and mobile menu; search/empty/error/retry/pagination/favorites; profile/admin; PDF toolbar themes; real CBZ reader; reduced motion. All data and network traffic stayed local.",
   );
 } finally {
   await browser?.close();

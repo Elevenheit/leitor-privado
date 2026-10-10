@@ -1,5 +1,5 @@
 import { supabase } from "@/lib/supabase";
-import { catalogSearch } from "@/lib/catalog";
+import { catalogSearch, normalizeSearchText } from "@/lib/catalog";
 import type { Book, Series, Volume } from "@/lib/types";
 import { DataError, throwOnError } from "./errors";
 import { readRows } from "./read-rows";
@@ -70,7 +70,7 @@ export async function listAdminCatalog(
   search: string,
 ) {
   const library = await ownedLibrary(ownerId);
-  const term = catalogSearch(search).toLocaleLowerCase();
+  const term = normalizeSearchText(catalogSearch(search));
   const titles = new Map(library.series.map((item) => [item.id, item.title]));
   const filtered = sortBooks(
     library.books.filter(
@@ -80,7 +80,7 @@ export async function listAdminCatalog(
           book.title,
           book.original_filename,
           titles.get(book.series_id || "") || "",
-        ].some((value) => value.toLocaleLowerCase().includes(term)),
+        ].some((value) => normalizeSearchText(value).includes(term)),
     ),
     library.volumes,
   );
@@ -103,9 +103,9 @@ export async function listAdminWorks(
   ownerId: string,
 ) {
   const library = await ownedLibrary(ownerId);
-  const term = catalogSearch(search).toLocaleLowerCase();
+  const term = normalizeSearchText(catalogSearch(search));
   const matches = (value: string) =>
-    !term || value.toLocaleLowerCase().includes(term);
+    !term || normalizeSearchText(value).includes(term);
   const chapters = new Map<string, number>();
   const volumes = new Map<string, number>();
   const matchingBooks = new Set<string>();

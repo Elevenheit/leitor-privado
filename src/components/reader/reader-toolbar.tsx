@@ -10,15 +10,18 @@ import {
   Minus,
   Plus,
   Settings2,
+  Search,
   Type,
 } from "lucide-react";
 import Link from "next/link";
+import { useEffect, useRef } from "react";
 import { READER_FONT_MIN, READER_FONT_MAX } from "@/lib/reader-preferences";
 
 type Theme = "dark" | "sepia" | "light";
 type Mode = "text" | "page";
 type Preferences = Partial<{
   fontSize: number;
+  fontFamily: "serif" | "sans";
   lineHeight: number;
   textWidth: number;
   theme: Theme;
@@ -39,15 +42,18 @@ type Props = {
   settingsOpen: boolean;
   setSettingsOpen: (open: boolean | ((previous: boolean) => boolean)) => void;
   fontSize: number;
+  fontFamily?: "serif" | "sans";
   lineHeight: number;
   textWidth: number;
   theme: Theme;
   showIllustrations: boolean;
   updatePrefs: (change: Preferences) => void;
   onNavigate?: (bookId: string) => void;
+  onDocumentNavigation?: () => void;
 };
 
 export function ReaderToolbar(props: Props) {
+  const toolbar = useRef<HTMLDivElement>(null);
   const {
     mode,
     setView,
@@ -62,15 +68,30 @@ export function ReaderToolbar(props: Props) {
     settingsOpen,
     setSettingsOpen,
     fontSize,
+    fontFamily = "serif",
     lineHeight,
     textWidth,
     theme,
     showIllustrations,
     updatePrefs,
   } = props;
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const close = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setSettingsOpen(false);
+      toolbar.current
+        ?.querySelector<HTMLButtonElement>('[aria-controls="reader-settings"]')
+        ?.focus();
+    };
+    document.addEventListener("keydown", close);
+    return () => document.removeEventListener("keydown", close);
+  }, [settingsOpen, setSettingsOpen]);
   return (
     <div
       className="reader-toolbar"
+      ref={toolbar}
       onKeyDown={(event) => {
         if (settingsOpen && event.key === "Escape") {
           event.stopPropagation();
@@ -150,6 +171,17 @@ export function ReaderToolbar(props: Props) {
         </Link>
       </div>
       <div className="reader-toolbar-end">
+        {props.onDocumentNavigation && (
+          <button
+            className="reader-settings-button"
+            aria-label="Sumário e busca no PDF"
+            title="Sumário, busca e ir à página"
+            onClick={props.onDocumentNavigation}
+          >
+            <Search size={17} />
+            <span>Buscar</span>
+          </button>
+        )}
         <span className="reader-page-count">
           p. {currentPage} / {pages}
         </span>
@@ -184,13 +216,19 @@ export function ReaderToolbar(props: Props) {
       {settingsOpen && (
         <div className="reader-settings" id="reader-settings">
           <div className="reader-settings-title">Ajustes de leitura</div>
+          {mode === "page" && (
+            <p className="reader-settings-note">
+              O PDF preserva a diagramação original. Fonte, linha e largura
+              ficam disponíveis no modo Texto.
+            </p>
+          )}
           <div className="reader-controls">
             <div className="font-tools">
               <span>Fonte</span>
               <div>
                 <button
                   aria-label="Diminuir fonte"
-                  disabled={fontSize <= READER_FONT_MIN}
+                  disabled={mode !== "text" || fontSize <= READER_FONT_MIN}
                   onClick={() =>
                     updatePrefs({
                       fontSize: Math.max(READER_FONT_MIN, fontSize - 1),
@@ -202,7 +240,7 @@ export function ReaderToolbar(props: Props) {
                 <span>{fontSize}px</span>
                 <button
                   aria-label="Aumentar fonte"
-                  disabled={fontSize >= READER_FONT_MAX}
+                  disabled={mode !== "text" || fontSize >= READER_FONT_MAX}
                   onClick={() =>
                     updatePrefs({
                       fontSize: Math.min(READER_FONT_MAX, fontSize + 1),
@@ -214,9 +252,26 @@ export function ReaderToolbar(props: Props) {
               </div>
             </div>
             <label className="reader-select">
+              Tipografia
+              <select
+                aria-label="Fonte do texto"
+                value={fontFamily}
+                disabled={mode !== "text"}
+                onChange={(event) =>
+                  updatePrefs({
+                    fontFamily: event.target.value as "serif" | "sans",
+                  })
+                }
+              >
+                <option value="serif">Literária</option>
+                <option value="sans">Sem serifa</option>
+              </select>
+            </label>
+            <label className="reader-select">
               Linha
               <select
                 aria-label="Altura da linha"
+                disabled={mode !== "text"}
                 value={lineHeight}
                 onChange={(e) =>
                   updatePrefs({ lineHeight: Number(e.target.value) })
@@ -231,6 +286,7 @@ export function ReaderToolbar(props: Props) {
               Largura
               <select
                 aria-label="Largura do texto"
+                disabled={mode !== "text"}
                 value={textWidth}
                 onChange={(e) =>
                   updatePrefs({ textWidth: Number(e.target.value) })
@@ -259,6 +315,7 @@ export function ReaderToolbar(props: Props) {
               Ilustrações
               <select
                 aria-label="Ilustrações no modo texto"
+                disabled={mode !== "text"}
                 value={showIllustrations ? "show" : "hide"}
                 onChange={(e) =>
                   updatePrefs({

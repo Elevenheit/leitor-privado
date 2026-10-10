@@ -1,30 +1,45 @@
-﻿# Nook — branch do beta fechado
+# Nook
 
-Implementação em `feat/nook-closed-beta`, baseada em `origin/main` no commit `1a019c1`.
+Biblioteca com login, cadastro sem convite e acesso permanente às obras publicadas.
+Leitura PDF em texto ou páginas originais, CBZ, busca e sumário interno, marcadores,
+favoritos e retomada individual. Next.js, React, TypeScript e Supabase.
 
-**Ainda não liberada para iniciar o beta.** O código, a migração e os testes locais estão disponíveis. Falta o projeto Supabase de teste e a homologação autenticada ponta a ponta. Nenhum banco remoto foi modificado e nenhum deploy foi feito.
+Interface em preto e azul, adaptada ao celular, tablet e computador; temas
+claro e sépia continuam disponíveis no leitor. A renovação e os testes estão em
+[STATUS](docs/STATUS.md).
+
+As quatro etapas estão implementadas. O projeto Supabase `nook-closed-beta`
+recebeu o upgrade e as correções de segurança em 9/10/2026. Consulte
+[PUBLICACAO](docs/PUBLICACAO.md) para o estado do deploy e os ajustes de Auth.
+
+Para experimentar sem banco remoto, use Node compatível com `package.json`
+(22.18 ou superior, antes de 25; recomendado 24):
 
 ```sh
 npm ci
+npm run demo:local
+```
+
+Espere `DEMO READY` e abra <http://127.0.0.1:3100/__demo>. Os dados são fictícios e
+temporários. Cadastro aceita e-mail fictício novo; a demo não envia e-mails nem
+valida senhas. Encerre com `Ctrl+C`.
+
+Siga [MIGRATIONS](docs/MIGRATIONS.md) para instalação/upgrade, Auth e administrador;
+[TESTE-LOCAL-RENDER](docs/TESTE-LOCAL-RENDER.md) para desenvolvimento e publicação.
+Catálogo e buckets continuam privados. A administração publica cada obra explicitamente;
+progresso, favoritos e marcadores permanecem separados por conta.
+
+```sh
 npm test
 npm run lint
 npm run typecheck
 npm run build
-npm start -- -p 3100
-# Em outro terminal, depois de instalar o Chromium:
 npx playwright install chromium
 npm run test:browser
+npm run test:next-browser
+npm run bench:catalog
 ```
 
-Use Node 24.21 (versão verificada) e preencha somente as duas variáveis públicas em `.env.local` com o projeto de teste. A aplicação exige as migrations 005 a 012; não a aponte para o banco antigo sem migrar primeiro uma cópia aprovada.
-
-`supabase/schema.sql` é somente o baseline histórico anterior ao beta, não um snapshot atual. Para banco vazio ou clone existente, siga a sequência em `docs/MIGRATIONS.md`.
-
-A interface restaurada usa as tabelas e a configuração existentes, sem RPCs novas, migration 013, integrações externas ou mudanças no comando de build do Render. Preferências preservam os campos atuais e progresso usa o upsert original. Não execute o baseline ou migrations para corrigir esta versão da interface.
-
-- [Configuração, backup, reversão e roteiro de sete dias](docs/BETA.md)
-- [Sequência de migrations](docs/MIGRATIONS.md)
-- [Resultados e limitações de cada recurso](docs/STATUS.md)
-- [Captura desktop](docs/screenshots/access-desktop.png) e [cadastro no celular](docs/screenshots/signup-mobile.png)
-
-O catálogo continua privado. Obras antigas ficam disponíveis ao administrador; cada obra deve ser liberada conscientemente aos convidados, com registro de autorização de compartilhamento. Favoritos, progresso e marcadores são separados por conta.
+[STATUS](docs/STATUS.md) e [relatório](docs/LANCAMENTO-NOOK.md) registram evidências
+e limites. [E2E](docs/E2E.md) explica a homologação com Supabase isolado.
+Builds, dependências e capturas são regeneráveis e ficam fora do Git.

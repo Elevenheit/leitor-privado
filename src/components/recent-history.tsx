@@ -1,18 +1,22 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowUpRight } from "lucide-react";
 import { SeriesCover } from "./series/series-cover";
 import { supabase } from "@/lib/supabase";
 import { formats, mediaHref, type Format } from "@/lib/catalog";
-import { calculateReadingProgress } from "@/lib/media-rules";
+import { continuingWorks, readingActivity } from "@/lib/reading-activity";
+import { readRows } from "@/lib/data/read-rows";
 import { getPrivateCoverUrl } from "@/lib/cover-url";
+import { listLocalProgress, mergeProgress } from "@/lib/local-progress";
+import { Button } from "./ui/button";
 
 type RecentEntry = {
   book_id: string;
   page_number: number;
   page_count: number | null;
   scroll_ratio: number;
+  line_index?: number;
   completed: boolean;
   updated_at: string;
   books: {
@@ -34,22 +38,16 @@ type RecentEntry = {
 };
 
 function position(entry: RecentEntry) {
-  if (entry.completed) return { label: "Concluído", percent: 100 };
-  const total = entry.books.total_pages || entry.page_count;
+  const activity = readingActivity(entry, entry.books);
   const page = Math.max(1, entry.page_number);
-  const measured = calculateReadingProgress({
-    mediaType: entry.books.media_type === "cbz" ? "cbz" : "pdf",
-    pageNumber: page,
-    totalPages: total,
-    scrollRatio: entry.scroll_ratio,
-  });
-  if (measured.completed) return { label: "Concluído", percent: 100 };
-  return total && total > 0
-    ? {
-        label: `Página ${Math.min(page, total)} de ${total}`,
-        percent: measured.percent,
-      }
-    : { label: `Página ${page}`, percent: null };
+  return activity.completed
+    ? { label: "Concluído", percent: 100 }
+    : {
+        label: activity.total
+          ? `Página ${Math.min(page, activity.total)} de ${activity.total}`
+          : `Página ${page}`,
+        percent: activity.percent,
+      };
 }
 
 function chapter(entry: RecentEntry) {
@@ -73,10 +71,12 @@ export function RecentHistory({
   userId,
   format,
   featured = false,
+  full = false,
 }: {
   userId: string;
   format?: Format;
   featured?: boolean;
+  full?: boolean;
 }) {
   const [result, setResult] = useState<{
     key: string;
@@ -85,52 +85,105 @@ export function RecentHistory({
     error: boolean;
   } | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const [showHistory, setShowHistory] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [limit, setLimit] = useState(full ? 24 : 6);
   const key = `${userId}:${format || "all"}`;
+  useEffect(() => {
+    const refresh = () => setAttempt((value) => value + 1);
+    window.addEventListener("nook-progress-synced", refresh);
+    window.addEventListener("nook-progress-changed", refresh);
+    window.addEventListener("pageshow", refresh);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("nook-progress-synced", refresh);
+      window.removeEventListener("nook-progress-changed", refresh);
+      window.removeEventListener("pageshow", refresh);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
   useEffect(() => {
     let live = true;
     async function load() {
+      setBusy(true);
       try {
         const api = supabase();
-        // Inner joins exclude inaccessible/deleted works before the limit.
-        let query = api
-          .from("reading_progress")
-          .select(
-            "book_id,page_number,page_count,scroll_ratio,completed,updated_at,books!inner(id,title,media_type,total_pages,chapter_number,chapter_title,content_type,series!inner(id,title,format,cover_path),volumes(volume_number,title))",
-          )
-          .eq("owner_id", userId);
-        if (format) query = query.eq("books.series.format", format);
-        const { data, error } = await query
-          .order("updated_at", { ascending: false })
-          .order("book_id")
-          .limit(6)
-          .returns<RecentEntry[]>();
-        if (error) throw error;
+        // Paginate before grouping, with a fresh query for each page.
+        // Inner joins enforce current catalog access through RLS.
+        const data = await readRows<RecentEntry>(() => {
+          let query = api
+            .from("reading_progress")
+            .select(
+              "book_id,page_number,page_count,line_index,scroll_ratio,completed,updated_at,books!inner(id,title,media_type,total_pages,chapter_number,chapter_title,content_type,series!inner(id,title,format,cover_path),volumes(volume_number,title))",
+            )
+            .eq("owner_id", userId);
+          if (format) query = query.eq("books.series.format", format);
+          return query
+            .order("updated_at", { ascending: false })
+            .order("book_id")
+            .returns<RecentEntry[]>();
+        }, "Não foi possível carregar suas leituras.");
         if (!live) return;
-        const items = data || [];
-        const paths = [
-          ...new Set(
-            items
-              .map((entry) => entry.books.series.cover_path)
-              .filter((path): path is string => Boolean(path)),
-          ),
-        ];
-        const signed = await Promise.all(
-          paths.map(async (path) => {
-            return [
-              path,
-              await getPrivateCoverUrl(userId, path).catch(() => ""),
-            ] as const;
-          }),
+        let items = mergeProgress(userId, data || []);
+        const missing = listLocalProgress(userId).filter(
+          (local) => !items.some((entry) => entry.book_id === local.book_id),
+        );
+        if (missing.length) {
+          // Recheck catalog access through RLS; never resurrect a deleted or revoked work from cache.
+          const localById = new Map(
+            missing.map((local) => [local.book_id, local]),
+          );
+          for (let offset = 0; offset < missing.length; offset += 100) {
+            const books = await api
+              .from("books")
+              .select(
+                "id,title,media_type,total_pages,chapter_number,chapter_title,content_type,series!inner(id,title,format,cover_path),volumes(volume_number,title)",
+              )
+              .in(
+                "id",
+                missing
+                  .slice(offset, offset + 100)
+                  .map((local) => local.book_id),
+              )
+              .returns<RecentEntry["books"][]>();
+            if (books.error) throw books.error;
+            for (const book of books.data || []) {
+              if (!book.series || (format && book.series.format !== format))
+                continue;
+              const local = localById.get(book.id);
+              if (local)
+                items.push({
+                  ...local,
+                  page_count: local.page_count || null,
+                  books: book,
+                });
+            }
+          }
+        }
+        items = items.sort(
+          (a, b) =>
+            b.updated_at.localeCompare(a.updated_at) ||
+            a.book_id.localeCompare(b.book_id),
         );
         if (live)
-          setResult({
+          setResult((previous) => ({
             key,
             items,
-            covers: Object.fromEntries(signed),
+            covers: previous?.key === key ? previous.covers : {},
             error: false,
-          });
+          }));
       } catch {
-        if (live) setResult({ key, items: [], covers: {}, error: true });
+        if (live)
+          setResult((previous) =>
+            previous?.key === key
+              ? { ...previous, error: true }
+              : { key, items: [], covers: {}, error: true },
+          );
+      } finally {
+        if (live) setBusy(false);
       }
     }
     void load();
@@ -138,6 +191,49 @@ export function RecentHistory({
       live = false;
     };
   }, [userId, format, key, attempt]);
+
+  const resultItems = result?.items;
+  const resultKey = result?.key;
+  const allItems = useMemo(() => {
+    if (!resultItems || resultKey !== key) return [];
+    return full && showHistory ? resultItems : continuingWorks(resultItems);
+  }, [resultItems, resultKey, key, full, showHistory]);
+  const visibleItems = useMemo(
+    () => allItems.slice(0, limit),
+    [allItems, limit],
+  );
+  // Only sign covers that are actually displayed, including when history is paged.
+  const pathsKey = JSON.stringify([
+    ...new Set(
+      visibleItems
+        .map((entry) => entry.books.series.cover_path)
+        .filter((path): path is string => Boolean(path)),
+    ),
+  ]);
+  useEffect(() => {
+    let live = true;
+    const paths: string[] = JSON.parse(pathsKey);
+    if (!paths.length) return;
+    void Promise.all(
+      paths.map(
+        async (path) =>
+          [
+            path,
+            await getPrivateCoverUrl(userId, path).catch(() => ""),
+          ] as const,
+      ),
+    ).then((signed) => {
+      if (live)
+        setResult((previous) =>
+          previous?.key === key
+            ? { ...previous, covers: Object.fromEntries(signed) }
+            : previous,
+        );
+    });
+    return () => {
+      live = false;
+    };
+  }, [pathsKey, userId, key, attempt]);
 
   if (!result || result.key !== key)
     return (
@@ -154,7 +250,7 @@ export function RecentHistory({
         </div>
       </section>
     );
-  if (result.error)
+  if (result.error && !result.items.length)
     return (
       <p className="history-error" role="status">
         Não foi possível carregar seu histórico.{" "}
@@ -163,12 +259,29 @@ export function RecentHistory({
         </button>
       </p>
     );
-  if (!result.items.length) return null;
-  const current = featured
-    ? result.items.find(
-        (entry) => !entry.completed && position(entry).percent !== 100,
-      )
-    : undefined;
+  if (!allItems.length && !full)
+    return (
+      <section
+        className="recent-section continuation-empty"
+        aria-labelledby="recent-history-title"
+      >
+        <h2 id="recent-history-title">Continue de onde parou</h2>
+        <p>Nenhuma leitura em andamento. Escolha uma história para começar.</p>
+        <Link className="history-all" href="/library">
+          Explorar biblioteca <ArrowUpRight size={14} aria-hidden="true" />
+        </Link>
+      </section>
+    );
+  const empty = !allItems.length ? (
+    <div className="empty-state">
+      <h2>Nenhuma leitura em andamento</h2>
+      <p>Escolha uma história para começar.</p>
+      <Link className="primary-button" href="/library">
+        Explorar biblioteca
+      </Link>
+    </div>
+  ) : null;
+  const current = featured ? visibleItems[0] : undefined;
   function renderEntry(entry: RecentEntry, prominent = false) {
     const book = entry.books;
     const progress = position(entry);
@@ -178,7 +291,7 @@ export function RecentHistory({
       <Link
         className={`history-card${prominent ? " history-featured" : ""}`}
         key={entry.book_id}
-        href={mediaHref(book)}
+        href={`${mediaHref(book)}${readingActivity(entry, book).completed ? "?restart=1" : ""}`}
       >
         <div className="history-cover">
           <SeriesCover
@@ -211,7 +324,9 @@ export function RecentHistory({
             </div>
           )}
           <span className="history-action">
-            {entry.completed ? "Ler novamente" : "Continuar lendo"}
+            {readingActivity(entry, book).completed
+              ? "Ler novamente"
+              : "Continuar lendo"}
             <ArrowUpRight size={14} aria-hidden="true" />
           </span>
         </div>
@@ -219,23 +334,81 @@ export function RecentHistory({
     );
   }
   return (
-    <section className="recent-section" aria-labelledby="recent-history-title">
+    <section
+      id="continue-reading"
+      className="recent-section"
+      aria-labelledby="recent-history-title"
+    >
+      {result.error && (
+        <p className="history-error" role="status">
+          Não foi possível atualizar o histórico.{" "}
+          <Button
+            variant="ghost"
+            onClick={() => setAttempt((value) => value + 1)}
+          >
+            Tentar novamente
+          </Button>
+        </p>
+      )}
       <div className="recent-heading">
         <h2 id="recent-history-title">
-          {current ? "Volte à sua história" : "Seu histórico recente"}
+          {full && showHistory
+            ? "Histórico de leitura"
+            : "Continue de onde parou"}
         </h2>
+        {!full && (
+          <Link className="history-all" href="/continue">
+            Ver todas <ArrowUpRight size={14} aria-hidden="true" />
+          </Link>
+        )}
       </div>
+      {full && (
+        <div
+          className="catalog-segments"
+          role="group"
+          aria-label="Exibição das leituras"
+        >
+          <button
+            aria-pressed={!showHistory}
+            onClick={() => {
+              setShowHistory(false);
+              setLimit(24);
+            }}
+          >
+            Em andamento
+          </button>
+          <button
+            aria-pressed={showHistory}
+            onClick={() => {
+              setShowHistory(true);
+              setLimit(24);
+            }}
+          >
+            Histórico completo
+          </button>
+        </div>
+      )}
+      {empty}
       {current && renderEntry(current, true)}
-      {result.items.some((entry) => entry !== current) && (
+      {visibleItems.some((entry) => entry !== current) && (
         <div
           className={`recent-grid${current ? " recent-secondary" : ""}`}
           tabIndex={0}
-          aria-label="Itens do histórico recente"
+          aria-label="Leituras para continuar"
         >
-          {result.items
+          {visibleItems
             .filter((entry) => entry !== current)
             .map((entry) => renderEntry(entry))}
         </div>
+      )}
+      {full && allItems.length > limit && (
+        <Button
+          variant="secondary"
+          loading={busy}
+          onClick={() => setLimit((value) => value + 24)}
+        >
+          Mostrar mais leituras
+        </Button>
       )}
     </section>
   );

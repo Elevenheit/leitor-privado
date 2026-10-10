@@ -1,4 +1,5 @@
 import type { CatalogOrder, ReadingState } from "./data/catalog";
+import type { Format } from "./catalog";
 
 export type CatalogContext = {
   search: string;
@@ -6,6 +7,7 @@ export type CatalogContext = {
   readingState: ReadingState;
   order: CatalogOrder;
   scroll: number;
+  category?: Format;
 };
 export const emptyCatalogContext: CatalogContext = {
   search: "",
@@ -31,6 +33,9 @@ export function parseCatalogContext(value: string | null): CatalogContext {
         : "all",
       order: ["title", "last-read"].includes(p.order) ? p.order : "recent",
       scroll: Number.isFinite(p.scroll) ? Math.max(0, p.scroll) : 0,
+      category: ["novel", "manga", "manhwa"].includes(p.category)
+        ? p.category
+        : undefined,
     };
   } catch {
     return { ...emptyCatalogContext };

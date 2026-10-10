@@ -34,6 +34,19 @@ async function load(entry) {
   );
 }
 const { sortBooks, sortVolumes } = await load("src/lib/reader-navigation.ts");
+const { hasLibraryAccess } = await load("src/lib/data/access.ts");
+assert.equal(
+  hasLibraryAccess({
+    role: "reader",
+    revoked: false,
+    expires_at: "2000-01-01",
+  }),
+  true,
+);
+assert.equal(hasLibraryAccess({ role: "reader", revoked: false }, true), false);
+assert.equal(hasLibraryAccess({ role: "admin", revoked: false }, true), true);
+assert.equal(hasLibraryAccess({ role: "admin", revoked: true }), false);
+assert.equal(hasLibraryAccess(null), false);
 const base = {
   created_at: "2026-01-01",
   volume_id: null,
@@ -89,6 +102,24 @@ assert.ok(
 assert.deepEqual(
   extractReadingBlocks([null, { foo: 1 }], [0, 0, 600, 800]),
   [],
+);
+for (const content of [
+  "1984",
+  "A pista era https://example.test/pista no bilhete.",
+  "Copyright era o nome do personagem.",
+  "ISBN 1234",
+  "— Uma resposta.",
+]) {
+  assert.ok(
+    extractReadingBlocks([item(content, 700)], [0, 0, 600, 800]).some(
+      (block) => block.text === content,
+    ),
+    content,
+  );
+}
+assert.equal(
+  extractReadingBlocks([item("Page 1", 700)], [0, 0, 600, 800])[0].text,
+  "Page 1",
 );
 const urls = await load("src/lib/private-media-url.ts");
 globalThis.testApi = {
@@ -251,6 +282,8 @@ const media = Array.from({ length: 1005 }, (_, n) => ({
 const cleanupBatches = [];
 let listingFailure = false,
   deleted = false;
+let sharedCover = false,
+  coverCheckFails = false;
 globalThis.testApi = {
   from: (table) => {
     let after = "",
@@ -269,6 +302,11 @@ globalThis.testApi = {
         return query;
       },
       maybeSingle: async () => {
+        if (!deleting && table === "series")
+          return {
+            data: sharedCover ? { id: "other-work" } : null,
+            error: coverCheckFails ? { message: "unavailable" } : null,
+          };
         assert.equal(deleting, true);
         deleted = true;
         return { data: { id: "work" }, error: null };
@@ -303,6 +341,33 @@ const removed = cleanupBatches
 assert.equal(removed.length, 1005);
 assert.equal(new Set(removed).size, 1005);
 assert.ok(cleanupBatches.every((batch) => batch.paths.length <= 100));
+sharedCover = true;
+cleanupBatches.length = 0;
+await deleteSeriesAndMedia("a", {
+  id: "work",
+  title: "Local",
+  cover_path: "shared.png",
+});
+assert.equal(
+  cleanupBatches.some((batch) => batch.bucket === "covers"),
+  false,
+  "Deleting one work preserves a cover referenced by another",
+);
+sharedCover = false;
+coverCheckFails = true;
+await assert.rejects(
+  deleteSeriesAndMedia("a", {
+    id: "work",
+    title: "Local",
+    cover_path: "shared.png",
+  }),
+  /limpeza/,
+);
+assert.equal(
+  cleanupBatches.some((batch) => batch.bucket === "covers"),
+  false,
+  "Unconfirmed cover references must preserve the object",
+);
 listingFailure = true;
 deleted = false;
 await assert.rejects(

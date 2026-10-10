@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { UploadCloud, X } from "lucide-react";
 import {
   suggestDraft,
@@ -39,6 +39,16 @@ export function BatchUploadModal({
   const inputRef = useRef<HTMLInputElement>(null);
   const controllers = useRef(new Map<string, AbortController>());
   const processing = useRef(false);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    const activeControllers = controllers.current;
+    return () => {
+      mounted.current = false;
+      for (const controller of activeControllers.values()) controller.abort();
+      activeControllers.clear();
+    };
+  }, []);
   const [selectedSeries, setSelectedSeries] = useState<Series | null>(null);
   const [selectedVolume, setSelectedVolume] = useState<Volume | null>(null);
   const completed = drafts.filter((item) => item.status === "done").length;
@@ -81,6 +91,7 @@ export function BatchUploadModal({
     if (inputRef.current) inputRef.current.value = "";
   }
   function change(id: string, update: Partial<BatchDraft>) {
+    if (!mounted.current) return;
     setDrafts((previous) =>
       previous.map((item) => (item.id === id ? { ...item, ...update } : item)),
     );
@@ -124,6 +135,7 @@ export function BatchUploadModal({
     }[] = [];
     const seenNames = new Set<string>();
     for (const draft of items) {
+      if (!mounted.current) return;
       if (draft.status === "done") continue;
       const number = draft.chapterNumber.trim()
         ? Number(draft.chapterNumber)
@@ -147,6 +159,7 @@ export function BatchUploadModal({
       let media: Awaited<ReturnType<typeof validateBatchFile>>;
       try {
         media = await validateBatchFile(draft.file);
+        if (!mounted.current) return;
         if (draft.mediaType !== media.mediaType)
           throw new Error("O tipo escolhido não corresponde ao arquivo.");
         if (
@@ -157,6 +170,7 @@ export function BatchUploadModal({
             "O formato do arquivo não corresponde ao tipo da obra.",
           );
         await findDuplicateBook(seriesId, draft.file.name);
+        if (!mounted.current) return;
       } catch (cause) {
         change(draft.id, {
           status: "error",
@@ -185,6 +199,7 @@ export function BatchUploadModal({
     const volumesByKey = new Map<string, string | null>();
     try {
       for (const item of ready) {
+        if (!mounted.current) return;
         if (volumesByKey.has(item.volumeKey)) {
           item.volumeId = volumesByKey.get(item.volumeKey) || null;
           continue;
@@ -235,7 +250,7 @@ export function BatchUploadModal({
     let cursor = 0;
     let anySuccess = false;
     const worker = async () => {
-      while (cursor < ready.length) {
+      while (mounted.current && cursor < ready.length) {
         const item = ready[cursor++];
         const controller = new AbortController();
         controllers.current.set(item.draft.id, controller);
@@ -284,8 +299,8 @@ export function BatchUploadModal({
     await Promise.all(
       Array.from({ length: Math.min(2, ready.length) }, () => worker()),
     );
-    setRunning(false);
-    if (anySuccess) {
+    if (mounted.current) setRunning(false);
+    if (anySuccess && mounted.current) {
       try {
         await onComplete();
       } catch (cause) {
