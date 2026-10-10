@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useId, useState } from "react";
+import { Search } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { catalogSearch } from "@/lib/catalog";
 import type { Series, Volume } from "@/lib/types";
@@ -87,21 +88,6 @@ function LibraryPicker<T extends Item>({
     value && !rows.some((row) => row.id === value.id) ? [value, ...rows] : rows;
   return (
     <fieldset className="library-picker" disabled={disabled}>
-      <label>
-        Buscar {label.toLowerCase()}
-        <input
-          type="search"
-          aria-label={`Buscar ${label.toLowerCase()} para selecionar`}
-          placeholder={
-            isVolume ? "Título ou número do volume" : "Título da obra"
-          }
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setPage(0);
-          }}
-        />
-      </label>
       <label htmlFor={selectId}>{label}</label>
       <select
         id={selectId}
@@ -128,6 +114,22 @@ function LibraryPicker<T extends Item>({
           </option>
         ))}
       </select>
+      <label className="picker-search">
+        <Search size={15} aria-hidden="true" />
+        <span className="sr-only">Buscar {label.toLowerCase()}</span>
+        <input
+          type="search"
+          aria-label={`Buscar ${label.toLowerCase()} para selecionar`}
+          placeholder={
+            isVolume ? "Título ou número do volume" : "Título da obra"
+          }
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setPage(0);
+          }}
+        />
+      </label>
       {loading ? (
         <small role="status">Carregando opções…</small>
       ) : result?.error ? (
@@ -137,7 +139,7 @@ function LibraryPicker<T extends Item>({
             Tentar novamente
           </button>
         </p>
-      ) : (
+      ) : page > 0 || result?.more ? (
         <div className="picker-pages">
           <button
             type="button"
@@ -157,7 +159,17 @@ function LibraryPicker<T extends Item>({
             Mais opções
           </button>
         </div>
-      )}
+      ) : !rows.length && !value ? (
+        <small className="picker-hint">
+          {isVolume && !seriesId
+            ? "Escolha uma obra primeiro."
+            : query
+              ? "Nenhum resultado para esta busca."
+              : isVolume
+                ? "Nenhum volume cadastrado. Você pode criar um novo."
+                : "Nenhuma obra cadastrada."}
+        </small>
+      ) : null}
     </fieldset>
   );
 }

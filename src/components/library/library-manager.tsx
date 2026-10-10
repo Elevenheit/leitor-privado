@@ -234,14 +234,16 @@ export function LibraryManager({ user }: { user: User }) {
     <>
       <Nav back />
       <main id="main-content" tabIndex={-1} className="manager-page">
-        <Link href="/" className="back-link">
-          <ArrowLeft size={16} /> Biblioteca
+        <Link href="/admin" className="back-link">
+          <ArrowLeft size={16} /> Administração
         </Link>
         <header className="manager-heading">
           <div>
             <span className="eyebrow">Organização do acervo</span>
-            <h1>Gerenciar biblioteca</h1>
-            <p>Selecione arquivos para alterar a organização, tipo ou ordem.</p>
+            <h1>Organizar arquivos</h1>
+            <p>
+              Selecione os arquivos à esquerda e escolha o que deseja alterar.
+            </p>
           </div>
         </header>
         {error && (
@@ -345,7 +347,17 @@ export function LibraryManager({ user }: { user: User }) {
             )}
           </section>
           <aside className="manager-actions">
-            <h2>Ação em massa</h2>
+            <span className="eyebrow">Edição em lote</span>
+            <h2>
+              {selected.size
+                ? `${selected.size} arquivo${selected.size === 1 ? "" : "s"} selecionado${selected.size === 1 ? "" : "s"}`
+                : "O que vamos organizar?"}
+            </h2>
+            {!selected.size && (
+              <p className="manager-selection-hint">
+                Marque um ou mais arquivos para habilitar as ações abaixo.
+              </p>
+            )}
             <label>
               Ação
               <select

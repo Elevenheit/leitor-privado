@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
+import { BatchUploadModal } from "@/components/library/batch-upload-modal";
 import { BetaAccess } from "@/components/beta-access";
 import { mediaHref } from "@/lib/catalog";
 import { AuthGate } from "@/components/auth-gate";
@@ -74,6 +75,7 @@ function SeriesDetail({ user, id }: { user: User; id: string }) {
     null,
   );
   const [busy, setBusy] = useState(false);
+  const [showBatchUpload, setShowBatchUpload] = useState(false);
   const [editing, setEditing] = useState<Book | null>(null);
   const [chapterName, setChapterName] = useState("");
   const [chapterNumber, setChapterNumber] = useState("");
@@ -278,7 +280,7 @@ function SeriesDetail({ user, id }: { user: User; id: string }) {
     ? Math.round((summary.completedCount / chapterCount) * 100)
     : 0;
 
-  if (loading)
+  if (loading && !series)
     return (
       <>
         <Nav back />
@@ -303,18 +305,21 @@ function SeriesDetail({ user, id }: { user: User; id: string }) {
   return (
     <>
       <Nav back />
-      <main id="main-content" tabIndex={-1} className="series-page">
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="series-page admin-series-page"
+      >
         <Link className="back-link" href="/admin">
           <ArrowLeft size={16} /> Administração
         </Link>
         <section className="series-hero">
           <div className="series-hero-cover">
-            <SeriesCover title={series.title} src={coverUrl} />
+            <SeriesCover compact title={series.title} src={coverUrl} />
           </div>
           <div className="series-hero-copy">
             <span className="eyebrow">
-              Administração ·{" "}
-              {series.beta_visible ? "Publicada" : "Restrita"}
+              Administração · {series.beta_visible ? "Publicada" : "Restrita"}
             </span>
             <h1>{series.title}</h1>
             {series.description && <p>{series.description}</p>}
@@ -329,6 +334,17 @@ function SeriesDetail({ user, id }: { user: User; id: string }) {
               {overallProgress > 0 && (
                 <span>{overallProgress}% concluídos</span>
               )}
+            </div>
+            <div className="admin-work-actions">
+              <button
+                className="primary-button"
+                onClick={() => setShowBatchUpload(true)}
+              >
+                <Plus size={16} /> Adicionar arquivos
+              </button>
+              <Link className="secondary-button" href={`/series/${id}`}>
+                Ver como leitor <ChevronRight size={15} />
+              </Link>
             </div>
             {lastRead && (
               <Link className="last-read" href={mediaHref(lastRead)}>
@@ -345,10 +361,10 @@ function SeriesDetail({ user, id }: { user: User; id: string }) {
             <button onClick={() => setError("")}>×</button>
           </div>
         )}
-        <section className="volumes-section">
+        <section className="volumes-section" aria-busy={loading}>
           <div className="section-head">
             <div>
-              <span className="eyebrow">Organize sua leitura</span>
+              <span className="eyebrow">Organização da obra</span>
               <h2>
                 Volumes <span className="count">{summary.volumeCount}</span>
               </h2>
@@ -472,7 +488,7 @@ function SeriesDetail({ user, id }: { user: User; id: string }) {
               <p>
                 Adicione um PDF pela biblioteca para associá-lo a esta obra.
               </p>
-              <Link href="/" className="primary-button">
+              <Link href="/admin" className="primary-button">
                 Voltar à biblioteca
               </Link>
             </div>
@@ -490,6 +506,15 @@ function SeriesDetail({ user, id }: { user: User; id: string }) {
             Mais arquivos
           </button>
         </nav>
+        {showBatchUpload && (
+          <BatchUploadModal
+            ownerId={user.id}
+            series={[series]}
+            initialSeries={series}
+            onClose={() => setShowBatchUpload(false)}
+            onComplete={load}
+          />
+        )}
         {editingVolume && (
           <div
             className="modal-backdrop"

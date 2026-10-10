@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { ChevronDown, ShieldCheck } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import type { Series } from "@/lib/types";
@@ -93,7 +94,16 @@ export function CatalogAccess({
       className="publisher"
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
-      <summary>Autorização de compartilhamento e moderação</summary>
+      <summary>
+        <span className="publisher-icon">
+          <ShieldCheck size={21} />
+        </span>
+        <span>
+          <strong>Publicação e moderação</strong>
+          <small>Controle o acesso às obras e acompanhe denúncias.</small>
+        </span>
+        <ChevronDown size={18} className="publisher-chevron" />
+      </summary>
       {open && (
         <>
           <div className="profile-form">

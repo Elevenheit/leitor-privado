@@ -4,6 +4,10 @@ import Link from "next/link";
 import { CatalogAccess } from "@/components/admin/catalog-access";
 import { useRef, useState } from "react";
 import {
+  ArrowUpRight,
+  BookOpen,
+  FolderOpen,
+  Layers3,
   ChevronRight,
   FilePlus2,
   FileText,
@@ -515,18 +519,26 @@ export function AdminDashboard({ user }: { user: User }) {
         tabIndex={-1}
         className="dashboard admin-dashboard"
       >
-        <CatalogAccess ownerId={user.id} onChanged={load} />
+        <div className="admin-context">
+          <span>
+            <span className="admin-context-dot" /> Nook Studio
+          </span>
+          <Link href="/">
+            Ver biblioteca <ArrowUpRight size={14} />
+          </Link>
+        </div>
         <section className="library-section">
           <div className="section-head">
             <div>
               <span className="eyebrow">Administração do acervo</span>
-              <h1>
-                Gerenciar biblioteca <span className="count">{totalCount}</span>
-              </h1>
+              <h1>Sua biblioteca, em ordem.</h1>
+              <p className="admin-intro">
+                Crie obras, organize volumes e prepare a próxima leitura.
+              </p>
             </div>
             <div className="library-buttons">
               <Link className="manage-link" href="/manage">
-                <ListChecks size={16} /> Gerenciar
+                <ListChecks size={16} /> Organizar arquivos
               </Link>
               <details className="add-menu" ref={addMenuRef}>
                 <summary>
@@ -571,6 +583,87 @@ export function AdminDashboard({ user }: { user: User }) {
               </button>
             </div>
           )}
+          <div className="admin-overview" aria-label="Resumo do acervo">
+            <div>
+              <span className="admin-stat-icon">
+                <BookOpen size={20} />
+              </span>
+              <div>
+                <strong>{loading ? "—" : totalCount}</strong>
+                <span>
+                  {query || favoriteOnly
+                    ? "Obras encontradas"
+                    : "Obras no acervo"}
+                </span>
+              </div>
+            </div>
+            <div>
+              <span className="admin-stat-icon">
+                <Layers3 size={20} />
+              </span>
+              <div>
+                <strong>{loading ? "—" : fileCount}</strong>
+                <span>Arquivos no acervo</span>
+              </div>
+            </div>
+            <div>
+              <span className="admin-stat-icon">
+                <FolderOpen size={20} />
+              </span>
+              <div>
+                <strong>{loading ? "—" : looseCount}</strong>
+                <span>
+                  {query || favoriteOnly
+                    ? "Sem obra neste filtro"
+                    : "Arquivos sem obra"}
+                </span>
+              </div>
+            </div>
+          </div>
+          <div className="admin-shortcuts" aria-label="Ações rápidas">
+            <button onClick={() => setShowCreate(true)}>
+              <span className="shortcut-icon">
+                <Plus size={20} />
+              </span>
+              <span>
+                <strong>Criar uma obra</strong>
+                <small>Comece pelo título e pela capa</small>
+              </span>
+              <ChevronRight size={16} />
+            </button>
+            <button
+              onClick={() => setShowBatchUpload(true)}
+              disabled={uploading}
+            >
+              <span className="shortcut-icon">
+                <UploadCloud size={20} />
+              </span>
+              <span>
+                <strong>Enviar arquivos</strong>
+                <small>Adicione vários capítulos de uma vez</small>
+              </span>
+              <ChevronRight size={16} />
+            </button>
+            <Link href="/manage">
+              <span className="shortcut-icon">
+                <ListChecks size={20} />
+              </span>
+              <span>
+                <strong>Organizar o acervo</strong>
+                <small>Ajuste volumes, tipos e ordem</small>
+              </span>
+              <ChevronRight size={16} />
+            </Link>
+          </div>
+          <div className="admin-collection-heading">
+            <div>
+              <h2>Obras do acervo</h2>
+              <p>Abra uma obra para gerenciar seus volumes e capítulos.</p>
+            </div>
+            <span>
+              {totalCount} {totalCount === 1 ? "obra" : "obras"}
+            </span>
+          </div>
           <div className="toolbar">
             <div className="search">
               <Search size={18} />
@@ -606,10 +699,6 @@ export function AdminDashboard({ user }: { user: User }) {
                 <Star size={13} /> Favoritos
               </button>
             </div>
-            <span className="muted">
-              {fileCount}{" "}
-              {fileCount === 1 ? "arquivo no acervo" : "arquivos no acervo"}
-            </span>
           </div>
           {loading ? (
             <p className="empty-state">Carregando biblioteca…</p>
@@ -627,12 +716,20 @@ export function AdminDashboard({ user }: { user: User }) {
                           aria-label={`Administrar ${item.title}`}
                         >
                           <SeriesCover
+                            compact
                             title={item.title}
                             src={coverUrls[item.id]}
                           />
                         </Link>
                         <div className="series-copy">
                           <div>
+                            <span className="admin-format">
+                              {item.format === "novel"
+                                ? "Light Novel"
+                                : item.format === "manga"
+                                  ? "Mangá"
+                                  : "Manhwa"}
+                            </span>
                             <Link
                               href={`/admin/series/${item.id}`}
                               className="series-title"
@@ -668,14 +765,16 @@ export function AdminDashboard({ user }: { user: User }) {
                                 : "capítulos"}
                             </p>
                           </div>
-                          <small className="visibility-badge">
+                          <small
+                            className={`visibility-badge ${item.beta_visible ? "is-published" : "is-restricted"}`}
+                          >
                             {item.beta_visible
                               ? "Publicada"
                               : "Restrita à administração"}
                           </small>
                           <div className="series-actions">
                             <Link href={`/admin/series/${item.id}`}>
-                              Abrir obra <ChevronRight size={15} />
+                              Gerenciar obra <ChevronRight size={15} />
                             </Link>
                             <button
                               aria-label={`Editar ${item.title}`}
@@ -770,22 +869,25 @@ export function AdminDashboard({ user }: { user: User }) {
                 )}
             </>
           )}
-          <nav className="pagination" aria-label="Páginas da administração">
-            <button
-              disabled={!page || loading}
-              onClick={() => setPage(page - 1)}
-            >
-              Anterior
-            </button>
-            <span>Página {page + 1}</span>
-            <button
-              disabled={!hasMore || loading}
-              onClick={() => setPage(page + 1)}
-            >
-              Próxima
-            </button>
-          </nav>
+          {(page > 0 || hasMore) && (
+            <nav className="pagination" aria-label="Páginas da administração">
+              <button
+                disabled={!page || loading}
+                onClick={() => setPage(page - 1)}
+              >
+                Anterior
+              </button>
+              <span>Página {page + 1}</span>
+              <button
+                disabled={!hasMore || loading}
+                onClick={() => setPage(page + 1)}
+              >
+                Próxima
+              </button>
+            </nav>
+          )}
         </section>
+        <CatalogAccess ownerId={user.id} onChanged={load} />
         <footer className="site-footer">
           nook. <span>Um capítulo de cada vez.</span>
         </footer>

@@ -20,6 +20,10 @@ npm ci
 npm run demo:local
 ```
 
+A administração inclui resumo do acervo, ações rápidas, organização de arquivos e
+envio em lote com destino, revisão e confirmação. Com a demo em execução,
+`node tests/admin-studio.mjs` verifica esses fluxos e layouts de 320 a 1440 pixels.
+
 Espere `DEMO READY` e abra <http://127.0.0.1:3100/__demo>. Os dados são fictícios e
 temporários. Cadastro aceita e-mail fictício novo; a demo não envia e-mails nem
 valida senhas. Encerre com `Ctrl+C`.
