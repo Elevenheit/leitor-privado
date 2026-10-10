@@ -241,9 +241,7 @@ export function LibraryManager({ user }: { user: User }) {
           <div>
             <span className="eyebrow">Organização do acervo</span>
             <h1>Organizar arquivos</h1>
-            <p>
-              Selecione os arquivos à esquerda e escolha o que deseja alterar.
-            </p>
+            <p>Selecione os arquivos e escolha o que deseja alterar.</p>
           </div>
         </header>
         {error && (

@@ -1167,11 +1167,13 @@
 }
 .admin-work-actions {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 22px;
 }
-.admin-work-actions :is(button, a) {
+.admin-work-actions :is(.primary-button, .secondary-button) {
+  margin-top: 0;
   font-size: 12px;
   padding: 10px 15px;
 }
